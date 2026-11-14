@@ -1,4 +1,5 @@
 import { convertToExcalidrawElements } from "@excalidraw/excalidraw";
+import { newElementWith } from "@excalidraw/element";
 import { FONT_FAMILY, randomId } from "@excalidraw/common";
 
 import type { ExcalidrawElementSkeleton } from "@excalidraw/element/transform";
@@ -423,27 +424,27 @@ export const applyAiOps = (
     pairs,
   );
 
+  // newElementWith bumps version + versionNonce + updated like the editor
+  // does, so undo/redo and sync see these as real edits
   const next = elements.map((original) => {
-    let el = original;
-    if (deleted.has(el.id)) {
-      return {
-        ...el,
-        isDeleted: true,
-        version: el.version + 1,
-      } as ExcalidrawElement;
+    if (deleted.has(original.id)) {
+      return newElementWith(original, { isDeleted: true });
     }
+    let el = original;
     const recolor = recolored.get(el.id);
     if (recolor) {
-      el = { ...el, ...recolor, version: el.version + 1 } as ExcalidrawElement;
+      el = newElementWith(el, recolor as any);
     }
     const arrows = arrowRefs.get(el.id);
     if (arrows) {
-      // keep the real element, just register the new arrows on it
-      return {
-        ...el,
-        boundElements: [...(el.boundElements ?? []), ...arrows],
-        version: el.version + 1,
-      } as ExcalidrawElement;
+      // keep the real element, just register the new arrows on it (and drop
+      // references to arrows this edit deleted)
+      el = newElementWith(el, {
+        boundElements: [
+          ...(el.boundElements ?? []).filter((b) => !deleted.has(b.id)),
+          ...arrows,
+        ],
+      });
     }
     return el;
   });

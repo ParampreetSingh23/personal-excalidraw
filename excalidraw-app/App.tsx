@@ -428,15 +428,16 @@ const ExcalidrawWrapper = () => {
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
       if (added.length) {
-        // next frame: the scene update above has to land first
-        requestAnimationFrame(() =>
-          excalidrawAPI.setViewport({
-            target: excalidrawAPI.getSceneElements(),
-            fit: "scale-down",
-            animation: true,
-            // keep clear of the docked panel and toolbars
-            offsets: { ui: true },
-          }),
+        // the scene update above has to land first
+        setTimeout(
+          () =>
+            excalidrawAPI.setViewport({
+              target: excalidrawAPI.getSceneElements(),
+              fit: "scale-down",
+              // keep clear of the docked panel and toolbars
+              offsets: { ui: true },
+            }),
+          80,
         );
       }
       return ops.summary;
@@ -461,16 +462,20 @@ const ExcalidrawWrapper = () => {
       elements: result.elements as OrderedExcalidrawElement[],
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     });
-    requestAnimationFrame(() =>
-      excalidrawAPI.setViewport({
-        target: excalidrawAPI.getSceneElements(),
-        fit: "scale-down",
-        animation: true,
-        offsets: { ui: true },
-      }),
+    // the scene update above has to land first
+    setTimeout(
+      () =>
+        excalidrawAPI.setViewport({
+          target: excalidrawAPI.getSceneElements(),
+          fit: "scale-down",
+          offsets: { ui: true },
+        }),
+      80,
     );
     excalidrawAPI.setToast({
-      message: `Tidied ${result.moved} components · ⌘Z to undo`,
+      message: result.moved
+        ? `Tidied ${result.moved} components · ⌘Z to undo`
+        : "Already tidy",
     });
   }, [excalidrawAPI]);
 
@@ -711,7 +716,6 @@ const ExcalidrawWrapper = () => {
             excalidrawAPI?.setViewport({
               target: element.link,
               fit: "scale-down",
-              animation: true,
             });
           }
         }}
