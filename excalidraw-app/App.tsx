@@ -58,6 +58,7 @@ import { TopErrorBoundary } from "./components/TopErrorBoundary";
 import { loadDrawing, saveDrawing } from "./data/drawings";
 import { HLD_COMPONENTS } from "./data/components";
 import { LibraryIndexedDBAdapter } from "./data/library";
+import { parseMermaid, takePendingMermaid, toCleanStyle } from "./data/mermaid";
 import { useHandleAppTheme } from "./useHandleAppTheme";
 
 import "./index.scss";
@@ -230,9 +231,29 @@ const ExcalidrawWrapper = () => {
   useEffect(() => {
     const { id } = drawingRef.current;
     loadDrawing(id)
-      .then((data) => {
+      .then(async (data) => {
         const initial = toInitialData(data);
         baselineVersionRef.current = getSceneVersion(initial.elements || []);
+        // board created from the dashboard's "From Mermaid": draw it now.
+        // Baseline stays pre-mermaid, so the first onChange saves it.
+        const mermaid = takePendingMermaid(id);
+        if (mermaid) {
+          try {
+            const { elements, files } = await parseMermaid(mermaid);
+            initial.elements = [
+              ...(initial.elements || []),
+              ...convertToExcalidrawElements(toCleanStyle(elements), {
+                regenerateIds: true,
+              }),
+            ];
+            initial.files = { ...initial.files, ...files };
+          } catch (error: any) {
+            initial.appState = {
+              ...initial.appState,
+              errorMessage: `Mermaid could not be converted: ${error.message}`,
+            };
+          }
+        }
         if (data?.name) {
           setDrawing({ id, name: data.name });
         }
@@ -302,6 +323,26 @@ const ExcalidrawWrapper = () => {
     },
     [excalidrawAPI, flushSave],
   );
+
+  const renameBoard = useCallback(() => {
+    const name = window.prompt("Rename board", drawingRef.current.name)?.trim();
+    if (!name || name === drawingRef.current.name || !excalidrawAPI) {
+      return;
+    }
+    // id (and URL) stay the same; only the display name changes
+    drawingRef.current = { ...drawingRef.current, name };
+    setDrawing(drawingRef.current);
+    remember(drawingRef.current.id, name);
+    pendingRef.current = {
+      ...drawingRef.current,
+      elements: excalidrawAPI.getSceneElementsIncludingDeleted(),
+      appState: excalidrawAPI.getAppState(),
+      files: excalidrawAPI.getFiles(),
+    };
+    setSaveStatus("saving");
+    debouncedSave();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [excalidrawAPI, debouncedSave]);
 
   // back / forward
   useEffect(() => {
@@ -513,6 +554,7 @@ const ExcalidrawWrapper = () => {
         <AppMainMenu
           theme={appTheme}
           onOpenDrawings={() => setSwitcherOpen(true)}
+          onRename={renameBoard}
         />
         <AppWelcomeScreen onOpenDrawings={() => setSwitcherOpen(true)} />
         <TTDDialogTrigger />
@@ -526,6 +568,13 @@ const ExcalidrawWrapper = () => {
               predicate: true,
               keywords: ["switch", "new", "file", "drawings"],
               perform: () => setSwitcherOpen(true),
+            },
+            {
+              label: "Rename board",
+              category: DEFAULT_CATEGORIES.app,
+              predicate: true,
+              keywords: ["name", "title"],
+              perform: renameBoard,
             },
           ]}
         />

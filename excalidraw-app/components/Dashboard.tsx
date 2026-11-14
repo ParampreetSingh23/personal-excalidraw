@@ -4,8 +4,10 @@ import {
   createDrawing,
   deleteDrawing,
   listDrawings,
+  renameDrawing,
   slugify,
 } from "../data/drawings";
+import { parseMermaid, setPendingMermaid } from "../data/mermaid";
 
 import type { DrawingMeta } from "../data/drawings";
 
@@ -31,11 +33,99 @@ const timeAgo = (ms: number) => {
 
 const openBoard = (id: string) => window.location.assign(`/d/${id}`);
 
+const MERMAID_PLACEHOLDER = `flowchart LR
+  User --> CDN --> LB[Load Balancer]
+  LB --> API[API Server]
+  API --> Cache[(Redis)]
+  API --> DB[(Postgres)]`;
+
+const MermaidDialog = (props: { onClose: () => void }) => {
+  const [name, setName] = useState("");
+  const [code, setCode] = useState("");
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    if (!slugify(name)) {
+      setError("Give the board a name.");
+      return;
+    }
+    if (!code.trim()) {
+      setError("Paste some Mermaid code.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      await parseMermaid(code); // validate here, so errors show next to the code
+      const id = await createDrawing(name.trim());
+      setPendingMermaid(id, code);
+      openBoard(id);
+    } catch (e: any) {
+      setError(e?.message || String(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="dash__modal-backdrop" onMouseDown={props.onClose}>
+      <form
+        className="dash__modal"
+        onMouseDown={(e) => e.stopPropagation()}
+        onSubmit={(e) => {
+          e.preventDefault();
+          submit();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            props.onClose();
+          } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            submit();
+          }
+        }}
+      >
+        <h2>New board from Mermaid</h2>
+        <input
+          autoFocus
+          placeholder="Board name, e.g. checkout flow"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+        />
+        <textarea
+          spellCheck={false}
+          placeholder={MERMAID_PLACEHOLDER}
+          value={code}
+          onChange={(e) => setCode(e.target.value)}
+        />
+        <p className="dash__muted">
+          Flowchart, sequence, class, ER, state… It becomes normal, editable
+          shapes. If a board with this name exists, the diagram is added to it.
+        </p>
+        {error && (
+          <div className="dash__error dash__error--inline">{error}</div>
+        )}
+        <div className="dash__modal-actions">
+          <button type="button" onClick={props.onClose}>
+            Cancel
+          </button>
+          <button className="dash__primary" type="submit" disabled={busy}>
+            {busy ? "Converting…" : "Create board"} <kbd>⌘↵</kbd>
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+};
+
 export const Dashboard = () => {
   const [boards, setBoards] = useState<DrawingMeta[] | null>(null);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [newName, setNewName] = useState<string | null>(null);
+  const [mermaidOpen, setMermaidOpen] = useState(false);
+  const [renaming, setRenaming] = useState<{ id: string; name: string } | null>(
+    null,
+  );
 
   useEffect(() => {
     document.title = "Boards · Draw";
@@ -44,15 +134,25 @@ export const Dashboard = () => {
       .catch((e) => setError(e.message));
   }, []);
 
-  // N: new board, /: search (VS Code-ish muscle memory)
+  // N: new board, M: from Mermaid, /: search
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.target as HTMLElement).tagName === "INPUT") {
+      const tag = (event.target as HTMLElement).tagName;
+      if (
+        tag === "INPUT" ||
+        tag === "TEXTAREA" ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey
+      ) {
         return;
       }
       if (event.key === "n") {
         event.preventDefault();
         setNewName("");
+      } else if (event.key === "m") {
+        event.preventDefault();
+        setMermaidOpen(true);
       } else if (event.key === "/") {
         event.preventDefault();
         document.querySelector<HTMLInputElement>(".dash__search")?.focus();
@@ -93,6 +193,32 @@ export const Dashboard = () => {
     }
   };
 
+  const commitRename = async () => {
+    if (!renaming) {
+      return;
+    }
+    const { id } = renaming;
+    const name = renaming.name.trim();
+    setRenaming(null);
+    const old = boards?.find((b) => b.id === id);
+    if (!name || !old || name === old.name) {
+      return;
+    }
+    setBoards(
+      (list) =>
+        list &&
+        list.map((b) =>
+          b.id === id ? { ...b, name, updatedAt: Date.now() } : b,
+        ),
+    );
+    try {
+      await renameDrawing(id, name);
+    } catch (e: any) {
+      setError(e.message);
+      setBoards((list) => list && list.map((b) => (b.id === id ? old : b)));
+    }
+  };
+
   return (
     <div className="dash">
       <header className="dash__header">
@@ -118,9 +244,14 @@ export const Dashboard = () => {
       <main className="dash__main">
         <div className="dash__titlebar">
           <h1>Boards</h1>
-          <button className="dash__primary" onClick={() => setNewName("")}>
-            + New board <kbd>N</kbd>
-          </button>
+          <div className="dash__actions">
+            <button onClick={() => setMermaidOpen(true)}>
+              From Mermaid <kbd>M</kbd>
+            </button>
+            <button className="dash__primary" onClick={() => setNewName("")}>
+              + New board <kbd>N</kbd>
+            </button>
+          </div>
         </div>
 
         {newName !== null && (
@@ -158,29 +289,72 @@ export const Dashboard = () => {
         )}
 
         <div className="dash__grid">
-          {filtered.map((b) => (
-            <a key={b.id} className="dash__card" href={`/d/${b.id}`}>
-              <div className="dash__thumb" aria-hidden="true">
-                {b.name.slice(0, 1).toUpperCase()}
+          {filtered.map((b) =>
+            renaming?.id === b.id ? (
+              <div key={b.id} className="dash__card is-editing">
+                <div className="dash__thumb" aria-hidden="true">
+                  {(renaming.name || b.name).slice(0, 1).toUpperCase()}
+                </div>
+                <div className="dash__meta">
+                  <input
+                    autoFocus
+                    className="dash__rename"
+                    value={renaming.name}
+                    onChange={(e) =>
+                      setRenaming({ id: b.id, name: e.target.value })
+                    }
+                    onFocus={(e) => e.currentTarget.select()}
+                    onBlur={commitRename}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.currentTarget.blur();
+                      } else if (e.key === "Escape") {
+                        setRenaming(null);
+                      }
+                    }}
+                  />
+                  <div className="dash__time">
+                    Enter to save · Esc to cancel
+                  </div>
+                </div>
               </div>
-              <div className="dash__meta">
-                <div className="dash__name">{b.name}</div>
-                <div className="dash__time">{timeAgo(b.updatedAt)}</div>
-              </div>
-              <button
-                className="dash__delete"
-                title="Delete board"
-                onClick={(e) => {
-                  e.preventDefault();
-                  remove(b);
-                }}
-              >
-                ×
-              </button>
-            </a>
-          ))}
+            ) : (
+              <a key={b.id} className="dash__card" href={`/d/${b.id}`}>
+                <div className="dash__thumb" aria-hidden="true">
+                  {b.name.slice(0, 1).toUpperCase()}
+                </div>
+                <div className="dash__meta">
+                  <div className="dash__name">{b.name}</div>
+                  <div className="dash__time">{timeAgo(b.updatedAt)}</div>
+                </div>
+                <div className="dash__card-actions">
+                  <button
+                    title="Rename board"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setRenaming({ id: b.id, name: b.name });
+                    }}
+                  >
+                    Rename
+                  </button>
+                  <button
+                    className="dash__delete"
+                    title="Delete board"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      remove(b);
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              </a>
+            ),
+          )}
         </div>
       </main>
+
+      {mermaidOpen && <MermaidDialog onClose={() => setMermaidOpen(false)} />}
     </div>
   );
 };

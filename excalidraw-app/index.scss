@@ -240,6 +240,7 @@
     border-radius: 8px;
     background: var(--d-card);
     cursor: pointer;
+    white-space: nowrap;
   }
 
   kbd {
@@ -303,6 +304,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
     margin-bottom: 1.25rem;
 
     h1 {
@@ -356,10 +359,6 @@
       border-color: var(--d-accent);
       box-shadow: 0 4px 16px rgba(0, 0, 0, 0.06);
     }
-
-    &:hover .dash__delete {
-      opacity: 1;
-    }
   }
 
   &__thumb {
@@ -388,18 +387,120 @@
     font-size: 0.8rem;
   }
 
-  &__delete {
+  &__card-actions {
     position: absolute;
     top: 0.5rem;
     right: 0.5rem;
-    padding: 0 0.5rem !important;
-    line-height: 1.6;
+    display: flex;
+    gap: 0.375rem;
     opacity: 0;
     transition: opacity 0.15s;
 
-    &:hover {
-      color: #dc2626;
+    button {
+      padding: 0.15rem 0.6rem;
+      font-size: 0.8rem;
+      line-height: 1.6;
     }
+  }
+
+  &__card:hover &__card-actions,
+  &__card:focus-within &__card-actions {
+    opacity: 1;
+  }
+
+  &__delete:hover {
+    color: #dc2626;
+  }
+
+  &__rename {
+    width: 100%;
+    padding: 0.2rem 0.4rem;
+    border: 1px solid var(--d-accent);
+    border-radius: 6px;
+    background: var(--d-card);
+    font-weight: 600;
+    outline: none;
+  }
+
+  &__actions {
+    display: flex;
+    gap: 0.5rem;
+
+    kbd {
+      background: rgba(127, 127, 127, 0.18);
+    }
+  }
+
+  &__primary kbd {
+    background: rgba(255, 255, 255, 0.2) !important;
+  }
+
+  &__muted {
+    margin: 0;
+    color: var(--d-muted);
+    font-size: 0.85rem;
+  }
+
+  &__modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 10;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    padding: 10vh 1rem 1rem;
+    background: rgba(10, 12, 20, 0.35);
+  }
+
+  &__modal {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    width: min(44rem, 100%);
+    padding: 1.5rem;
+    border: 1px solid var(--d-border);
+    border-radius: 14px;
+    background: var(--d-card);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.18);
+
+    h2 {
+      margin: 0 0 0.25rem;
+      font-size: 1.15rem;
+    }
+
+    input,
+    textarea {
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--d-border);
+      border-radius: 8px;
+      background: var(--d-bg);
+      outline: none;
+
+      &:focus {
+        border-color: var(--d-accent);
+      }
+    }
+
+    textarea {
+      min-height: 16rem;
+      resize: vertical;
+      font-family: ui-monospace, "SF Mono", Menlo, monospace;
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
+  }
+
+  &__modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+  }
+
+  &__error--inline {
+    padding: 0;
+    white-space: pre-wrap;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 0.8rem;
   }
 
   &__hint,

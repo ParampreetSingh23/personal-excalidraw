@@ -7,6 +7,7 @@ import type { Theme } from "@excalidraw/element/types";
 export const AppMainMenu: React.FC<{
   theme: Theme | "system";
   onOpenDrawings: () => void;
+  onRename: () => void;
 }> = React.memo((props) => (
   <MainMenu>
     <MainMenu.Item
@@ -18,6 +19,9 @@ export const AppMainMenu: React.FC<{
     </MainMenu.Item>
     <MainMenu.Item icon={LoadIcon} onSelect={() => window.location.assign("/")}>
       All boards
+    </MainMenu.Item>
+    <MainMenu.Item icon={LoadIcon} onSelect={props.onRename}>
+      Rename board
     </MainMenu.Item>
     <MainMenu.Separator />
     <MainMenu.DefaultItems.LoadScene />

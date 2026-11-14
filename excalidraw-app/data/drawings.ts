@@ -54,3 +54,12 @@ export const createDrawing = async (name: string) => {
   }
   return id;
 };
+
+/** changes only the display name; id and URL stay the same */
+export const renameDrawing = async (id: string, name: string) => {
+  const data = await loadDrawing(id);
+  if (!data) {
+    throw new Error("Board not found");
+  }
+  await saveDrawing(id, JSON.stringify({ ...data, name }));
+};

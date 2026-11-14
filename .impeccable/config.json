@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "brag-output/composition/index.html"
+        ],
+        "createdAt": "2026-11-14T18:13:50.351Z",
+        "reason": "Claude: video frame composition; browser mock intentionally has the screenshot flush to its window edges, verified in rendered stills"
+      }
+    ]
+  }
+}

@@ -2,7 +2,9 @@
 
 Personal, minimal Excalidraw. Every drawing is its own file (`/d/<name>`), stored in Cloudflare Workers KV. Hosted at `draw.parampreetsingh.dev`.
 
-- `/` = boards dashboard (search `/`, new board `N`), `/d/<name>` = board
+- `/` = boards dashboard (search `/`, new board `N`, from Mermaid `M`), `/d/<name>` = board
+- Rename boards from the dashboard card or the editor menu (URL stays the same)
+- Mermaid → editable shapes: dashboard "From Mermaid", or paste Mermaid code onto any canvas
 - Password login (`/login`), 30-day session cookie
 - Right panel: one-click HLD components (User, Client, LB, Gateway, Server,
   DB, Cache, Queue, Container, K8s, Note …), each on **Alt+letter**; Alt+1 toggles panel
