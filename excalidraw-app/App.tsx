@@ -42,6 +42,7 @@ import type {
   ExcalidrawInitialDataState,
 } from "@excalidraw/excalidraw/types";
 import type {
+  ExcalidrawElement,
   NonDeletedExcalidrawElement,
   OrderedExcalidrawElement,
 } from "@excalidraw/element/types";
@@ -203,6 +204,23 @@ const ExcalidrawWrapper = () => {
   const debouncedSave = useMemo(
     () => debounce(() => doSave(), SAVE_DEBOUNCE_MS),
     [doSave],
+  );
+
+  /** zoom out (never in) so the given elements fit beside the docked panel.
+   * Bounds come from the elements we just set, so no waiting on the scene. */
+  const fitTo = useCallback(
+    (elements: readonly ExcalidrawElement[]) => {
+      const visible = elements.filter((el) => !el.isDeleted);
+      if (!excalidrawAPI || !visible.length) {
+        return;
+      }
+      excalidrawAPI.setViewport({
+        target: getCommonBounds(visible),
+        fit: "scale-down",
+        offsets: { ui: true },
+      });
+    },
+    [excalidrawAPI],
   );
 
   // dashboard preview: a small JPEG, made once the board has been quiet a bit
@@ -428,21 +446,11 @@ const ExcalidrawWrapper = () => {
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,
       });
       if (added.length) {
-        // the scene update above has to land first
-        setTimeout(
-          () =>
-            excalidrawAPI.setViewport({
-              target: excalidrawAPI.getSceneElements(),
-              fit: "scale-down",
-              // keep clear of the docked panel and toolbars
-              offsets: { ui: true },
-            }),
-          80,
-        );
+        fitTo(elements);
       }
       return ops.summary;
     },
-    [excalidrawAPI],
+    [excalidrawAPI, fitTo],
   );
 
   const tidy = useCallback(async () => {
@@ -452,32 +460,22 @@ const ExcalidrawWrapper = () => {
     const result = await tidyUp(
       excalidrawAPI.getSceneElementsIncludingDeleted(),
     );
-    if (!result) {
-      excalidrawAPI.setToast({
-        message: "Nothing to tidy: needs at least 2 components",
-      });
+    if ("error" in result) {
+      // nothing was changed; say why (e.g. arrows not attached to boxes)
+      excalidrawAPI.setToast({ message: result.error!, duration: 6000 });
       return;
     }
     excalidrawAPI.updateScene({
       elements: result.elements as OrderedExcalidrawElement[],
       captureUpdate: CaptureUpdateAction.IMMEDIATELY,
     });
-    // the scene update above has to land first
-    setTimeout(
-      () =>
-        excalidrawAPI.setViewport({
-          target: excalidrawAPI.getSceneElements(),
-          fit: "scale-down",
-          offsets: { ui: true },
-        }),
-      80,
-    );
+    fitTo(result.elements);
     excalidrawAPI.setToast({
       message: result.moved
         ? `Tidied ${result.moved} components · ⌘Z to undo`
         : "Already tidy",
     });
-  }, [excalidrawAPI]);
+  }, [excalidrawAPI, fitTo]);
 
   // back / forward
   useEffect(() => {

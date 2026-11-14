@@ -55,6 +55,42 @@ export const describeBoard = (elements: readonly ExcalidrawElement[]) => {
     return t && t.type === "text" ? t.text : "";
   };
 
+  // hand-drawn boards often put a free text on top of a box instead of binding
+  // it: such a text labels the smallest shape that contains its center
+  const shapes = elements.filter((e) => BINDABLE.has(e.type) && !e.isDeleted);
+  const looseText = new Map<string, string[]>(); // shape id -> texts inside
+  for (const t of elements) {
+    if (t.type !== "text" || t.isDeleted || t.containerId) {
+      continue;
+    }
+    const c = center(t);
+    let best: ExcalidrawElement | null = null;
+    for (const sh of shapes) {
+      const inside =
+        c.x > sh.x &&
+        c.x < sh.x + sh.width &&
+        c.y > sh.y &&
+        c.y < sh.y + sh.height;
+      if (
+        inside &&
+        (!best || sh.width * sh.height < best.width * best.height)
+      ) {
+        best = sh;
+      }
+    }
+    if (best) {
+      looseText.set(best.id, [...(looseText.get(best.id) ?? []), t.text]);
+    }
+  }
+  // boxes that arrows attach to are components even without any text
+  const arrowTargets = new Set(
+    elements.flatMap((e) =>
+      e.type === "arrow" && !e.isDeleted
+        ? [e.startBinding?.elementId, e.endBinding?.elementId]
+        : [],
+    ),
+  );
+
   const nodes: Node[] = [];
   const nodeOfElement = new Map<string, Node>(); // any element id -> its node
   const seenGroups = new Map<string, Node>();
@@ -69,6 +105,12 @@ export const describeBoard = (elements: readonly ExcalidrawElement[]) => {
         (e) => e.type === "text" && !e.containerId && outerGroup(e) === group,
       );
       label = t && t.type === "text" ? t.text : "";
+    }
+    if (!label) {
+      label = looseText.get(el.id)?.join(" ") ?? "";
+    }
+    if (!label && arrowTargets.has(el.id)) {
+      label = "(unlabeled box)";
     }
     if (!label) {
       continue;
