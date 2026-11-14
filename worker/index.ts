@@ -12,6 +12,8 @@ interface Env {
   /** `npx wrangler secret put GEMINI_API_KEY` (never sent to the browser) */
   GEMINI_API_KEY?: string;
   GEMINI_MODEL?: string;
+  /** low | medium | high */
+  GEMINI_THINKING?: string;
   DRAWINGS: {
     get(key: string, type: "stream"): Promise<ReadableStream | null>;
     put(
@@ -257,32 +259,58 @@ const handleAi = async (request: Request, env: Env) => {
   }
 
   const model = env.GEMINI_MODEL || "gemini-3.8-flash";
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-goog-api-key": env.GEMINI_API_KEY,
-      },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: AI_SYSTEM }] },
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: `CURRENT DIAGRAM:\n${diagram}\n\nREQUEST:\n${prompt}` },
-            ],
-          },
-        ],
-        generationConfig: {
-          responseFormat: {
-            text: { mimeType: "APPLICATION_JSON", schema: AI_SCHEMA },
-          },
+  const started = Date.now();
+  // our own deadline, well under Cloudflare's ~100s (which surfaces as a bare 524)
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 60_000);
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+      {
+        method: "POST",
+        signal: controller.signal,
+        headers: {
+          "content-type": "application/json",
+          "x-goog-api-key": env.GEMINI_API_KEY,
         },
-      }),
-    },
-  );
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: AI_SYSTEM }] },
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { text: `CURRENT DIAGRAM:\n${diagram}\n\nREQUEST:\n${prompt}` },
+              ],
+            },
+          ],
+          generationConfig: {
+            // default (medium) thinking is slow; diagram edits don't need it
+            thinkingConfig: { thinkingLevel: env.GEMINI_THINKING || "low" },
+            responseFormat: {
+              text: { mimeType: "APPLICATION_JSON", schema: AI_SCHEMA },
+            },
+          },
+        }),
+      },
+    );
+  } catch (error: any) {
+    console.log(
+      `ai: ${model} failed after ${Date.now() - started}ms: ${error?.name}`,
+    );
+    return json(
+      {
+        error:
+          error?.name === "AbortError"
+            ? "Gemini took longer than 60s. Try a shorter request, or try again."
+            : `Could not reach Gemini: ${error?.message ?? error}`,
+      },
+      504,
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+  console.log(`ai: ${model} ${response.status} in ${Date.now() - started}ms`);
   if (!response.ok) {
     // don't leak upstream details beyond status + message
     const detail = await response.text();
