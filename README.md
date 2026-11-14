@@ -12,6 +12,12 @@ Personal, minimal Excalidraw. Every drawing is its own file (`/d/<name>`), store
   Gemini (`gemini-3.8-flash`, set in `wrangler.jsonc` vars) returns edit ops that
   become our own components + bound arrows on the open board. ⌘Z undoes it.
   Key: `npx wrangler secret put GEMINI_API_KEY` (stays server-side).
+- **Tidy up (⌥T or the Tidy button)**: dagre lays the components out
+  left-to-right and redraws every connection (labels kept). One ⌘Z undoes it.
+- Dashboard cards show a preview (small JPEG, regenerated a few seconds after
+  each save and whenever a board is opened)
+- **Share (Share button)**: one read-only link per board, `/s/<token>`, no login
+  needed for that board only. "Stop sharing" or deleting the board kills it.
 - **Ctrl/Cmd+P** inside a board: fuzzy-open / create another board
 - Autosave (1s debounce), top-left chip shows `saved / saving… / not saved!`
 - Mermaid → diagram stays (menu → TTD). No collab, share links, AI, telemetry.

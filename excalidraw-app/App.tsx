@@ -7,6 +7,7 @@ import {
   Sidebar,
   convertToExcalidrawElements,
   getCommonBounds,
+  exportScene,
   useExcalidrawAPI,
 } from "@excalidraw/excalidraw";
 import { clearAppStateForLocalStorage } from "@excalidraw/excalidraw/appState";
@@ -40,11 +41,18 @@ import type {
   BinaryFiles,
   ExcalidrawInitialDataState,
 } from "@excalidraw/excalidraw/types";
-import type { OrderedExcalidrawElement } from "@excalidraw/element/types";
+import type {
+  NonDeletedExcalidrawElement,
+  OrderedExcalidrawElement,
+} from "@excalidraw/element/types";
 import type { ResolvablePromise } from "@excalidraw/common/utils";
 
 import { Provider, appJotaiStore } from "./app-jotai";
-import { SAVE_DEBOUNCE_MS, SAVE_RETRY_MS } from "./app_constants";
+import {
+  SAVE_DEBOUNCE_MS,
+  SAVE_RETRY_MS,
+  THUMBNAIL_DEBOUNCE_MS,
+} from "./app_constants";
 import { AppMainMenu } from "./components/AppMainMenu";
 import { AppWelcomeScreen } from "./components/AppWelcomeScreen";
 import {
@@ -54,9 +62,12 @@ import {
 } from "./components/ComponentsPanel";
 import { AiBar } from "./components/AiBar";
 import { Dashboard } from "./components/Dashboard";
+import { ShareDialog } from "./components/ShareDialog";
+import { SharedView } from "./components/SharedView";
 import { DrawingSwitcher } from "./components/DrawingSwitcher";
 import { TopErrorBoundary } from "./components/TopErrorBoundary";
-import { loadDrawing, saveDrawing } from "./data/drawings";
+import { loadDrawing, saveDrawing, saveThumbnail } from "./data/drawings";
+import { tidyUp } from "./data/layout";
 import { applyAiOps, askAi, describeBoard } from "./data/ai";
 import { HLD_COMPONENTS } from "./data/components";
 import { LibraryIndexedDBAdapter } from "./data/library";
@@ -104,6 +115,7 @@ const ExcalidrawWrapper = () => {
   });
   const [panelDocked, setPanelDocked] = useState(true);
   const [aiOpen, setAiOpen] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
 
@@ -167,6 +179,11 @@ const ExcalidrawWrapper = () => {
 
     try {
       await saveDrawing(pending.id, JSON.stringify(body));
+      debouncedThumbnail(
+        pending.id,
+        getNonDeletedElements(pending.elements),
+        files,
+      );
       if (pendingRef.current === pending) {
         pendingRef.current = null;
         setSaveStatus("saved");
@@ -186,6 +203,39 @@ const ExcalidrawWrapper = () => {
   const debouncedSave = useMemo(
     () => debounce(() => doSave(), SAVE_DEBOUNCE_MS),
     [doSave],
+  );
+
+  // dashboard preview: a small JPEG, made once the board has been quiet a bit
+  const debouncedThumbnail = useMemo(
+    () =>
+      debounce(
+        async (
+          id: string,
+          elements: readonly NonDeletedExcalidrawElement[],
+          files: BinaryFiles,
+        ) => {
+          if (!elements.length) {
+            return;
+          }
+          try {
+            const jpeg = await exportScene({
+              type: "jpeg",
+              data: { elements, files },
+              config: {
+                maxWidthOrHeight: 480,
+                quality: 0.8,
+                canvasBackgroundColor: "#ffffff",
+                padding: 24,
+              },
+            });
+            await saveThumbnail(id, jpeg);
+          } catch (error) {
+            console.warn("thumbnail failed", error);
+          }
+        },
+        THUMBNAIL_DEBOUNCE_MS,
+      ),
+    [],
   );
 
   /** resolves true if nothing is left unsaved */
@@ -265,6 +315,14 @@ const ExcalidrawWrapper = () => {
           ...initial,
           scrollToContent: !!initial.elements?.length,
         });
+        // older boards (and Mermaid/AI-only ones) get a dashboard preview too
+        if (initial.elements?.length) {
+          debouncedThumbnail(
+            id,
+            getNonDeletedElements(initial.elements),
+            initial.files || {},
+          );
+        }
         loadedRef.current = true;
       })
       .catch((error) => {
@@ -277,7 +335,7 @@ const ExcalidrawWrapper = () => {
         });
         setSaveStatus("error");
       });
-  }, []);
+  }, [debouncedThumbnail]); // stable (memoized once): still runs once
 
   const openDrawing = useCallback(
     async (id: string, name: string, { push = true } = {}) => {
@@ -376,6 +434,8 @@ const ExcalidrawWrapper = () => {
             target: excalidrawAPI.getSceneElements(),
             fit: "scale-down",
             animation: true,
+            // keep clear of the docked panel and toolbars
+            offsets: { ui: true },
           }),
         );
       }
@@ -383,6 +443,36 @@ const ExcalidrawWrapper = () => {
     },
     [excalidrawAPI],
   );
+
+  const tidy = useCallback(async () => {
+    if (!excalidrawAPI) {
+      return;
+    }
+    const result = await tidyUp(
+      excalidrawAPI.getSceneElementsIncludingDeleted(),
+    );
+    if (!result) {
+      excalidrawAPI.setToast({
+        message: "Nothing to tidy: needs at least 2 components",
+      });
+      return;
+    }
+    excalidrawAPI.updateScene({
+      elements: result.elements as OrderedExcalidrawElement[],
+      captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+    });
+    requestAnimationFrame(() =>
+      excalidrawAPI.setViewport({
+        target: excalidrawAPI.getSceneElements(),
+        fit: "scale-down",
+        animation: true,
+        offsets: { ui: true },
+      }),
+    );
+    excalidrawAPI.setToast({
+      message: `Tidied ${result.moved} components · ⌘Z to undo`,
+    });
+  }, [excalidrawAPI]);
 
   // back / forward
   useEffect(() => {
@@ -475,6 +565,12 @@ const ExcalidrawWrapper = () => {
       ) {
         return;
       }
+      if (event.code === "KeyT") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        tidy();
+        return;
+      }
       if (event.code === "KeyI") {
         event.preventDefault();
         event.stopImmediatePropagation();
@@ -498,7 +594,7 @@ const ExcalidrawWrapper = () => {
     };
     window.addEventListener("keydown", onKeyDown, true);
     return () => window.removeEventListener("keydown", onKeyDown, true);
-  }, [excalidrawAPI, insertComponent]);
+  }, [excalidrawAPI, insertComponent, tidy]);
 
   // Ctrl/Cmd+P: quick open. Capture phase, the editor binds it to a toast.
   useEffect(() => {
@@ -579,6 +675,20 @@ const ExcalidrawWrapper = () => {
           isMobile ? null : (
             <div className="top-right-bar">
               <button
+                className="top-btn"
+                title={`Tidy up layout (${ALT}T)`}
+                onClick={tidy}
+              >
+                Tidy
+              </button>
+              <button
+                className="top-btn"
+                title="Share read-only link"
+                onClick={() => setShareOpen(true)}
+              >
+                Share
+              </button>
+              <button
                 className="ai-trigger"
                 title={`Ask AI (${ALT}I)`}
                 onClick={() => setAiOpen((open) => !open)}
@@ -625,6 +735,20 @@ const ExcalidrawWrapper = () => {
               perform: () => setSwitcherOpen(true),
             },
             {
+              label: "Tidy up layout",
+              category: DEFAULT_CATEGORIES.app,
+              predicate: true,
+              keywords: ["layout", "arrange", "auto", "clean", "organize"],
+              perform: tidy,
+            },
+            {
+              label: "Share read-only link",
+              category: DEFAULT_CATEGORIES.app,
+              predicate: true,
+              keywords: ["share", "link", "public", "view"],
+              perform: () => setShareOpen(true),
+            },
+            {
               label: "Ask AI",
               category: DEFAULT_CATEGORIES.app,
               predicate: true,
@@ -645,6 +769,12 @@ const ExcalidrawWrapper = () => {
           onDock={setPanelDocked}
           onInsert={insertComponent}
         />
+        {shareOpen && (
+          <ShareDialog
+            boardId={drawing.id}
+            onClose={() => setShareOpen(false)}
+          />
+        )}
         {aiOpen && <AiBar onSubmit={runAi} onClose={() => setAiOpen(false)} />}
         {switcherOpen && (
           <DrawingSwitcher
@@ -658,9 +788,14 @@ const ExcalidrawWrapper = () => {
   );
 };
 
+const getShareToken = () =>
+  window.location.pathname.match(/^\/s\/([A-Za-z0-9_-]+)\/?$/)?.[1] ?? null;
+
 const ExcalidrawApp = () => (
   <TopErrorBoundary>
-    {getBoardId() ? (
+    {getShareToken() ? (
+      <SharedView token={getShareToken()!} />
+    ) : getBoardId() ? (
       <Provider store={appJotaiStore}>
         <ExcalidrawAPIProvider>
           <ExcalidrawWrapper />

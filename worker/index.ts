@@ -17,10 +17,11 @@ interface Env {
   GEMINI_FALLBACK_MODEL?: string;
   DRAWINGS: {
     get(key: string, type: "stream"): Promise<ReadableStream | null>;
+    get(key: string, type: "text"): Promise<string | null>;
     put(
       key: string,
-      value: string,
-      opts: { metadata: { name: string; updatedAt: number } },
+      value: string | ArrayBuffer,
+      opts?: { metadata: { name: string; updatedAt: number } },
     ): Promise<void>;
     delete(key: string): Promise<void>;
     list(opts: { prefix: string; cursor?: string }): Promise<{
@@ -387,7 +388,107 @@ const handleAi = async (request: Request, env: Env) => {
 // drawings API
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// thumbnails (small JPEG per board, made by the browser after saving)
+// ---------------------------------------------------------------------------
+
+const MAX_THUMB_BYTES = 400 * 1024;
+
+const handleThumb = async (request: Request, env: Env, id: string) => {
+  if (!ID_RE.test(id)) {
+    return json({ error: "invalid id" }, 400);
+  }
+  if (request.method === "PUT") {
+    const body = await request.arrayBuffer();
+    if (body.byteLength > MAX_THUMB_BYTES) {
+      return json({ error: "too large" }, 413);
+    }
+    await env.DRAWINGS.put(`t:${id}`, body);
+    return json({ ok: true });
+  }
+  if (request.method === "GET") {
+    const body = await env.DRAWINGS.get(`t:${id}`, "stream");
+    return body
+      ? new Response(body, {
+          headers: {
+            "content-type": "image/jpeg",
+            "cache-control": "private, max-age=60",
+          },
+        })
+      : new Response(null, { status: 404 });
+  }
+  return json({ error: "method not allowed" }, 405);
+};
+
+// ---------------------------------------------------------------------------
+// read-only share links: share:<id> -> token, s:<token> -> id
+// ---------------------------------------------------------------------------
+
+const newToken = () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(18)); // 144 bits
+  return btoa(String.fromCharCode(...bytes))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
+};
+
+const handleShare = async (request: Request, env: Env, id: string) => {
+  if (!ID_RE.test(id)) {
+    return json({ error: "invalid id" }, 400);
+  }
+  const existing = await env.DRAWINGS.get(`share:${id}`, "text");
+  switch (request.method) {
+    case "GET":
+      return json({ token: existing });
+    case "POST": {
+      if (existing) {
+        return json({ token: existing });
+      }
+      const token = newToken();
+      await env.DRAWINGS.put(`s:${token}`, id);
+      await env.DRAWINGS.put(`share:${id}`, token);
+      return json({ token });
+    }
+    case "DELETE":
+      if (existing) {
+        await env.DRAWINGS.delete(`s:${existing}`);
+        await env.DRAWINGS.delete(`share:${id}`);
+      }
+      return json({ ok: true });
+    default:
+      return json({ error: "method not allowed" }, 405);
+  }
+};
+
+/** the only unauthenticated data route: one board, by its share token */
+const handlePublic = async (request: Request, env: Env, token: string) => {
+  if (request.method !== "GET" || !/^[A-Za-z0-9_-]{16,64}$/.test(token)) {
+    return json({ error: "not found" }, 404);
+  }
+  const id = await env.DRAWINGS.get(`s:${token}`, "text");
+  const body = id && (await env.DRAWINGS.get(PREFIX + id, "stream"));
+  if (!body) {
+    return json({ error: "not found" }, 404);
+  }
+  return new Response(body, {
+    headers: {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      "x-robots-tag": "noindex",
+    },
+  });
+};
+
 const handleApi = async (request: Request, env: Env, url: URL) => {
+  const sub = url.pathname.match(
+    /^\/api\/(thumbs|drawings)\/([^/]+)\/?(share)?\/?$/,
+  );
+  if (sub?.[1] === "thumbs") {
+    return handleThumb(request, env, sub[2]);
+  }
+  if (sub?.[3] === "share") {
+    return handleShare(request, env, sub[2]);
+  }
   const match = url.pathname.match(/^\/api\/drawings(?:\/([^/]+))?\/?$/);
   if (!match) {
     return json({ error: "not found" }, 404);
@@ -451,9 +552,17 @@ const handleApi = async (request: Request, env: Env, url: URL) => {
       });
       return json({ ok: true });
     }
-    case "DELETE":
-      await env.DRAWINGS.delete(key);
+    case "DELETE": {
+      // the board, its thumbnail and any share link go together
+      const token = await env.DRAWINGS.get(`share:${id}`, "text");
+      await Promise.all([
+        env.DRAWINGS.delete(key),
+        env.DRAWINGS.delete(`t:${id}`),
+        env.DRAWINGS.delete(`share:${id}`),
+        token ? env.DRAWINGS.delete(`s:${token}`) : null,
+      ]);
       return json({ ok: true });
+    }
     default:
       return json({ error: "method not allowed" }, 405);
   }
@@ -474,6 +583,10 @@ export default {
           "set-cookie": `${COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0`,
         },
       });
+    }
+    const publicMatch = url.pathname.match(/^\/api\/public\/([^/]+)\/?$/);
+    if (publicMatch) {
+      return handlePublic(request, env, publicMatch[1]);
     }
     if (!(await isAuthed(request, env))) {
       return json({ error: "unauthorized" }, 401);

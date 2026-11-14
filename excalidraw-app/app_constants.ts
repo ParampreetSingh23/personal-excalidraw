@@ -1,5 +1,6 @@
 export const SAVE_DEBOUNCE_MS = 1000;
 export const SAVE_RETRY_MS = 5000;
+export const THUMBNAIL_DEBOUNCE_MS = 3000;
 
 export const STORAGE_KEYS = {
   // only used by packages/excalidraw test helpers

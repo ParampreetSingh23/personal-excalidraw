@@ -63,3 +63,35 @@ export const renameDrawing = async (id: string, name: string) => {
   }
   await saveDrawing(id, JSON.stringify({ ...data, name }));
 };
+
+export const saveThumbnail = (id: string, jpeg: Blob) =>
+  fetch(`/api/thumbs/${id}`, { method: "PUT", body: jpeg });
+
+export const thumbnailUrl = (id: string, version: number) =>
+  `/api/thumbs/${id}?v=${version}`;
+
+// read-only share links ------------------------------------------------------
+
+const shareRequest = async (id: string, method: "GET" | "POST" | "DELETE") => {
+  const response = await request(`/${id}/share`, { method });
+  return ((await response.json()) as { token?: string | null }).token ?? null;
+};
+export const getShareToken = (id: string) => shareRequest(id, "GET");
+export const createShareToken = (id: string) => shareRequest(id, "POST");
+export const revokeShareToken = (id: string) => shareRequest(id, "DELETE");
+export const shareUrl = (token: string) =>
+  `${window.location.origin}/s/${token}`;
+
+/** no login needed: the token is the access */
+export const loadPublicDrawing = async (
+  token: string,
+): Promise<DrawingData | null> => {
+  const response = await fetch(`/api/public/${encodeURIComponent(token)}`);
+  if (response.status === 404) {
+    return null;
+  }
+  if (!response.ok) {
+    throw new Error(`Could not load (${response.status})`);
+  }
+  return response.json();
+};

@@ -43,7 +43,7 @@ const center = (el: ExcalidrawElement) => ({
   x: el.x + el.width / 2,
   y: el.y + el.height / 2,
 });
-const outerGroup = (el: ExcalidrawElement) => el.groupIds.at(-1);
+export const outerGroup = (el: ExcalidrawElement) => el.groupIds.at(-1);
 
 /** nodes = labelled shapes (one per component group), edges = bound arrows */
 export const describeBoard = (elements: readonly ExcalidrawElement[]) => {
@@ -173,6 +173,101 @@ const borderPoint = (
   return { x: c.x + dx * (s + gap), y: c.y + dy * (s + gap) };
 };
 
+export type Box = { id: string; x: number; y: number; w: number; h: number };
+export type ArrowPair = { a: Box; b: Box; label?: string };
+
+/**
+ * Converts new skeletons plus arrows between boxes (existing or new), with the
+ * arrows bound on both ends. Arrows can only bind to elements in the same
+ * conversion batch, so existing endpoints are cloned in as stand-ins (at the
+ * box's position) and dropped again; `arrowRefs` are the bindings to add to
+ * those real elements.
+ */
+export const convertWithArrows = (
+  elements: readonly ExcalidrawElement[],
+  skeletons: ExcalidrawElementSkeleton[],
+  newIds: ReadonlySet<string>,
+  pairs: readonly ArrowPair[],
+) => {
+  const batch = [...skeletons];
+  const standIns = new Set<string>();
+  for (const { a, b, label } of pairs) {
+    for (const t of [a, b]) {
+      if (!newIds.has(t.id) && !standIns.has(t.id)) {
+        const el = elements.find((x) => x.id === t.id);
+        if (!el) {
+          continue;
+        }
+        standIns.add(t.id);
+        batch.push({
+          type: el.type as any,
+          id: el.id,
+          x: t.x,
+          y: t.y,
+          width: t.w,
+          height: t.h,
+        });
+      }
+    }
+    const boxA = {
+      x: a.x,
+      y: a.y,
+      width: a.w,
+      height: a.h,
+    } as ExcalidrawElement;
+    const boxB = {
+      x: b.x,
+      y: b.y,
+      width: b.w,
+      height: b.h,
+    } as ExcalidrawElement;
+    const p1 = borderPoint(boxA, center(boxB));
+    const p2 = borderPoint(boxB, center(boxA));
+    batch.push({
+      type: "arrow",
+      x: p1.x,
+      y: p1.y,
+      width: p2.x - p1.x,
+      height: p2.y - p1.y,
+      points: [
+        [0, 0],
+        [p2.x - p1.x, p2.y - p1.y],
+      ] as any,
+      start: { id: a.id },
+      end: { id: b.id },
+      strokeColor: "#495057",
+      strokeWidth: 1,
+      roughness: 0,
+      ...(label
+        ? {
+            label: {
+              text: label,
+              fontSize: 14,
+              fontFamily: FONT_FAMILY.Nunito,
+            },
+          }
+        : {}),
+    } as ExcalidrawElementSkeleton);
+  }
+
+  // keep our ids: stand-ins must match the real elements, arrows bind by id
+  const converted = convertToExcalidrawElements(batch, {
+    regenerateIds: false,
+  });
+  const arrowRefs = new Map(
+    converted
+      .filter((el) => standIns.has(el.id))
+      .map((el) => [
+        el.id,
+        (el.boundElements ?? []).filter((b) => b.type === "arrow"),
+      ]),
+  );
+  return {
+    added: converted.filter((el) => !standIns.has(el.id)),
+    arrowRefs,
+  };
+};
+
 /** applies the ops; returns the full next element list + the new elements */
 export const applyAiOps = (
   elements: readonly ExcalidrawElement[],
@@ -274,10 +369,7 @@ export const applyAiOps = (
     nodes.filter((n) => !deleted.has(n.el.id)).map((n) => `${n.col},${n.row}`),
   );
   const skeletons: ExcalidrawElementSkeleton[] = [];
-  const target = new Map<
-    string,
-    { id: string; x: number; y: number; w: number; h: number }
-  >();
+  const target = new Map<string, Box>();
   for (const n of nodes) {
     const el = live.get(n.el.id) ?? n.el; // may have moved since the request
     if (!deleted.has(el.id)) {
@@ -316,77 +408,19 @@ export const applyAiOps = (
   }
 
   // --- edges ------------------------------------------------------------------
-  // arrows can only bind to elements in the same conversion batch, so existing
-  // endpoints are cloned in as stand-ins and dropped after conversion
-  const standIns = new Set<string>();
+  const pairs: ArrowPair[] = [];
   for (const e of ops.addEdges) {
     const a = target.get(e.from) ?? target.get(findNode(e.from)?.key ?? "");
     const b = target.get(e.to) ?? target.get(findNode(e.to)?.key ?? "");
-    if (!a || !b || a.id === b.id) {
-      continue;
+    if (a && b && a.id !== b.id) {
+      pairs.push({ a, b, label: e.label });
     }
-    for (const t of [a, b]) {
-      if (!newIds.has(t.id) && !standIns.has(t.id)) {
-        const el = elements.find((x) => x.id === t.id)!;
-        standIns.add(t.id);
-        skeletons.push({
-          type: el.type as any,
-          id: el.id,
-          x: el.x,
-          y: el.y,
-          width: el.width,
-          height: el.height,
-        });
-      }
-    }
-    const boxA = {
-      x: a.x,
-      y: a.y,
-      width: a.w,
-      height: a.h,
-    } as ExcalidrawElement;
-    const boxB = {
-      x: b.x,
-      y: b.y,
-      width: b.w,
-      height: b.h,
-    } as ExcalidrawElement;
-    const p1 = borderPoint(boxA, center(boxB));
-    const p2 = borderPoint(boxB, center(boxA));
-    skeletons.push({
-      type: "arrow",
-      x: p1.x,
-      y: p1.y,
-      width: p2.x - p1.x,
-      height: p2.y - p1.y,
-      points: [
-        [0, 0],
-        [p2.x - p1.x, p2.y - p1.y],
-      ] as any,
-      start: { id: a.id },
-      end: { id: b.id },
-      strokeColor: "#495057",
-      strokeWidth: 1,
-      roughness: 0,
-      ...(e.label
-        ? {
-            label: {
-              text: e.label,
-              fontSize: 14,
-              fontFamily: FONT_FAMILY.Nunito,
-            },
-          }
-        : {}),
-    } as ExcalidrawElementSkeleton);
   }
-
-  // keep our ids: stand-ins must match the real elements, arrows bind by id
-  const converted = convertToExcalidrawElements(skeletons, {
-    regenerateIds: false,
-  });
-  const added = converted.filter((el) => !standIns.has(el.id));
-  const standInById = new Map(
-    converted.filter((el) => standIns.has(el.id)).map((el) => [el.id, el]),
+  const { added, arrowRefs } = convertWithArrows(
+    elements,
+    skeletons,
+    newIds,
+    pairs,
   );
 
   const next = elements.map((original) => {
@@ -402,12 +436,9 @@ export const applyAiOps = (
     if (recolor) {
       el = { ...el, ...recolor, version: el.version + 1 } as ExcalidrawElement;
     }
-    const standIn = standInById.get(el.id);
-    if (standIn) {
+    const arrows = arrowRefs.get(el.id);
+    if (arrows) {
       // keep the real element, just register the new arrows on it
-      const arrows = (standIn.boundElements ?? []).filter(
-        (b) => b.type === "arrow",
-      );
       return {
         ...el,
         boundElements: [...(el.boundElements ?? []), ...arrows],

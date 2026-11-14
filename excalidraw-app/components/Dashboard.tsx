@@ -6,6 +6,7 @@ import {
   listDrawings,
   renameDrawing,
   slugify,
+  thumbnailUrl,
 } from "../data/drawings";
 import { parseMermaid, setPendingMermaid } from "../data/mermaid";
 
@@ -29,6 +30,28 @@ const timeAgo = (ms: number) => {
     }
   }
   return "";
+};
+
+/** saved preview, or the first letter until (or unless) it has loaded */
+const Thumb = ({ board }: { board: DrawingMeta }) => {
+  const [loaded, setLoaded] = useState(false);
+  return (
+    <div className="dash__thumb" aria-hidden="true">
+      {!loaded && board.name.slice(0, 1).toUpperCase()}
+      <img
+        alt=""
+        loading="lazy"
+        src={thumbnailUrl(board.id, board.updatedAt)}
+        // not display:none: lazy images that aren't rendered never load
+        style={
+          loaded
+            ? undefined
+            : { position: "absolute", width: 1, height: 1, opacity: 0 }
+        }
+        onLoad={() => setLoaded(true)}
+      />
+    </div>
+  );
 };
 
 const openBoard = (id: string) => window.location.assign(`/d/${id}`);
@@ -320,9 +343,7 @@ export const Dashboard = () => {
               </div>
             ) : (
               <a key={b.id} className="dash__card" href={`/d/${b.id}`}>
-                <div className="dash__thumb" aria-hidden="true">
-                  {b.name.slice(0, 1).toUpperCase()}
-                </div>
+                <Thumb board={b} />
                 <div className="dash__meta">
                   <div className="dash__name">{b.name}</div>
                   <div className="dash__time">{timeAgo(b.updatedAt)}</div>
