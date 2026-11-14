@@ -44,7 +44,7 @@ export const ComponentsPanel = (props: {
       ))}
     </div>
     <div className="components-panel__footer">
-      {ALT}1 toggles this panel · Ctrl/Cmd+P boards
+      {ALT}1 panel · {ALT}I AI · Ctrl/Cmd+P boards
     </div>
   </Sidebar>
 );

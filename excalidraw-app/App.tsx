@@ -52,10 +52,12 @@ import {
   COMPONENTS_SIDEBAR,
   ComponentsPanel,
 } from "./components/ComponentsPanel";
+import { AiBar } from "./components/AiBar";
 import { Dashboard } from "./components/Dashboard";
 import { DrawingSwitcher } from "./components/DrawingSwitcher";
 import { TopErrorBoundary } from "./components/TopErrorBoundary";
 import { loadDrawing, saveDrawing } from "./data/drawings";
+import { applyAiOps, askAi, describeBoard } from "./data/ai";
 import { HLD_COMPONENTS } from "./data/components";
 import { LibraryIndexedDBAdapter } from "./data/library";
 import { parseMermaid, takePendingMermaid, toCleanStyle } from "./data/mermaid";
@@ -101,6 +103,7 @@ const ExcalidrawWrapper = () => {
     return { id, name: id };
   });
   const [panelDocked, setPanelDocked] = useState(true);
+  const [aiOpen, setAiOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
 
@@ -344,6 +347,37 @@ const ExcalidrawWrapper = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [excalidrawAPI, debouncedSave]);
 
+  const runAi = useCallback(
+    async (prompt: string) => {
+      if (!excalidrawAPI) {
+        throw new Error("Editor not ready");
+      }
+      const board = describeBoard(excalidrawAPI.getSceneElements());
+      const ops = await askAi(prompt, board.forModel);
+      const { elements, added } = applyAiOps(
+        excalidrawAPI.getSceneElementsIncludingDeleted(),
+        ops,
+        board,
+      );
+      excalidrawAPI.updateScene({
+        elements: elements as OrderedExcalidrawElement[],
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+      if (added.length) {
+        // next frame: the scene update above has to land first
+        requestAnimationFrame(() =>
+          excalidrawAPI.setViewport({
+            target: excalidrawAPI.getSceneElements(),
+            fit: "scale-down",
+            animation: true,
+          }),
+        );
+      }
+      return ops.summary;
+    },
+    [excalidrawAPI],
+  );
+
   // back / forward
   useEffect(() => {
     const onPopState = () => {
@@ -433,6 +467,12 @@ const ExcalidrawWrapper = () => {
         event.shiftKey ||
         isWritableElement(event.target)
       ) {
+        return;
+      }
+      if (event.code === "KeyI") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        setAiOpen((open) => !open);
         return;
       }
       if (event.code === "Digit1") {
@@ -531,13 +571,22 @@ const ExcalidrawWrapper = () => {
         )}
         renderTopRightUI={(isMobile) =>
           isMobile ? null : (
-            <Sidebar.Trigger
-              name={COMPONENTS_SIDEBAR}
-              title={`Components (${ALT}1)`}
-              className="components-trigger"
-            >
-              Components
-            </Sidebar.Trigger>
+            <div className="top-right-bar">
+              <button
+                className="ai-trigger"
+                title={`Ask AI (${ALT}I)`}
+                onClick={() => setAiOpen((open) => !open)}
+              >
+                ✦ AI
+              </button>
+              <Sidebar.Trigger
+                name={COMPONENTS_SIDEBAR}
+                title={`Components (${ALT}1)`}
+                className="components-trigger"
+              >
+                Components
+              </Sidebar.Trigger>
+            </div>
           )
         }
         onLinkOpen={(element, event) => {
@@ -570,6 +619,13 @@ const ExcalidrawWrapper = () => {
               perform: () => setSwitcherOpen(true),
             },
             {
+              label: "Ask AI",
+              category: DEFAULT_CATEGORIES.app,
+              predicate: true,
+              keywords: ["ai", "gemini", "generate", "prompt", "design"],
+              perform: () => setAiOpen(true),
+            },
+            {
               label: "Rename board",
               category: DEFAULT_CATEGORIES.app,
               predicate: true,
@@ -583,6 +639,7 @@ const ExcalidrawWrapper = () => {
           onDock={setPanelDocked}
           onInsert={insertComponent}
         />
+        {aiOpen && <AiBar onSubmit={runAi} onClose={() => setAiOpen(false)} />}
         {switcherOpen && (
           <DrawingSwitcher
             currentId={drawing.id}

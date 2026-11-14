@@ -9,6 +9,9 @@
 interface Env {
   /** set with `npx wrangler secret put APP_PASSWORD` (local: .dev.vars) */
   APP_PASSWORD?: string;
+  /** `npx wrangler secret put GEMINI_API_KEY` (never sent to the browser) */
+  GEMINI_API_KEY?: string;
+  GEMINI_MODEL?: string;
   DRAWINGS: {
     get(key: string, type: "stream"): Promise<ReadableStream | null>;
     put(
@@ -149,6 +152,158 @@ const handleLogin = async (request: Request, env: Env) => {
 };
 
 // ---------------------------------------------------------------------------
+// AI: prompt + current diagram -> structured edit ops (Gemini)
+// ---------------------------------------------------------------------------
+
+const AI_TYPES = [
+  "user",
+  "client",
+  "mobile",
+  "cdn",
+  "dns",
+  "load_balancer",
+  "api_gateway",
+  "server",
+  "service",
+  "worker",
+  "database",
+  "cache",
+  "queue",
+  "object_storage",
+  "container",
+  "cluster",
+  "external_api",
+  "note",
+];
+
+const AI_SYSTEM = `You edit system-design diagrams on a whiteboard.
+You get the user's request and the CURRENT diagram: nodes (id, label, col, row)
+and edges (id, from, to). Return only the changes needed.
+
+Layout: nodes sit on a grid. col grows to the right, row grows downward.
+- Lay flows out left-to-right (client side on the left, data stores on the right
+  or below their service). Keep related nodes in nearby cells.
+- Never put a new node on a cell that is already taken; leave gaps if needed.
+- For an empty diagram start around col 0, row 0.
+
+Rules:
+- type must be one of: ${AI_TYPES.join(", ")}. Pick the closest one
+  (e.g. an "AI gateway" or "LLM router" is api_gateway, an "LLM" or "model
+  inference" is service, Postgres/Mongo are database, Redis is cache, Kafka/SQS
+  are queue, S3 is object_storage, browser/web app is client).
+- label: short and specific (max 4 words), e.g. "Auth Service", "Postgres".
+- New nodes get a ref like "n1", "n2"; edges may connect refs and existing ids.
+- To insert something in the middle of an existing connection (e.g. add a load
+  balancer between client and servers), remove that edge and add the new ones.
+- Do not remove or duplicate anything the user did not ask about.
+- summary: one short sentence describing what you changed.`;
+
+const AI_SCHEMA = {
+  type: "object",
+  properties: {
+    summary: { type: "string" },
+    addNodes: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          ref: { type: "string" },
+          type: { type: "string", enum: AI_TYPES },
+          label: { type: "string" },
+          col: { type: "integer" },
+          row: { type: "integer" },
+        },
+        required: ["ref", "type", "label", "col", "row"],
+      },
+    },
+    addEdges: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          from: { type: "string" },
+          to: { type: "string" },
+          label: { type: "string" },
+        },
+        required: ["from", "to"],
+      },
+    },
+    removeNodes: { type: "array", items: { type: "string" } },
+    removeEdges: { type: "array", items: { type: "string" } },
+  },
+  required: ["summary", "addNodes", "addEdges", "removeNodes", "removeEdges"],
+};
+
+const handleAi = async (request: Request, env: Env) => {
+  if (request.method !== "POST") {
+    return json({ error: "method not allowed" }, 405);
+  }
+  if (!env.GEMINI_API_KEY) {
+    return json(
+      { error: "AI not configured: GEMINI_API_KEY secret missing" },
+      501,
+    );
+  }
+  let body: { prompt?: unknown; diagram?: unknown };
+  try {
+    body = await request.json();
+  } catch {
+    return json({ error: "invalid json" }, 400);
+  }
+  const prompt = typeof body.prompt === "string" ? body.prompt.trim() : "";
+  const diagram = JSON.stringify(body.diagram ?? {});
+  if (!prompt || prompt.length > 2000 || diagram.length > 100_000) {
+    return json({ error: "prompt missing or too large" }, 400);
+  }
+
+  const model = env.GEMINI_MODEL || "gemini-3.8-flash";
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-goog-api-key": env.GEMINI_API_KEY,
+      },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: AI_SYSTEM }] },
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: `CURRENT DIAGRAM:\n${diagram}\n\nREQUEST:\n${prompt}` },
+            ],
+          },
+        ],
+        generationConfig: {
+          responseFormat: {
+            text: { mimeType: "APPLICATION_JSON", schema: AI_SCHEMA },
+          },
+        },
+      }),
+    },
+  );
+  if (!response.ok) {
+    // don't leak upstream details beyond status + message
+    const detail = await response.text();
+    let message = detail.slice(0, 300);
+    try {
+      message = JSON.parse(detail).error?.message ?? message;
+    } catch {}
+    return json({ error: `Gemini ${response.status}: ${message}` }, 502);
+  }
+  const result: any = await response.json();
+  const text = result?.candidates?.[0]?.content?.parts
+    ?.map((p: any) => p.text ?? "")
+    .join("");
+  try {
+    return json(JSON.parse(text));
+  } catch {
+    return json({ error: "AI returned an unreadable answer, try again" }, 502);
+  }
+};
+
+// ---------------------------------------------------------------------------
 // drawings API
 // ---------------------------------------------------------------------------
 
@@ -242,6 +397,9 @@ export default {
     }
     if (!(await isAuthed(request, env))) {
       return json({ error: "unauthorized" }, 401);
+    }
+    if (url.pathname === "/api/ai") {
+      return handleAi(request, env);
     }
     return handleApi(request, env, url);
   },

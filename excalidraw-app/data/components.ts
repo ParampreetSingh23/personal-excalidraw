@@ -6,12 +6,25 @@ import type { ExcalidrawElementSkeleton } from "@excalidraw/element/transform";
  * One-click HLD building blocks. Each `build` returns skeletons centered on
  * (cx, cy); everything in one component shares a group so it moves together.
  */
+/** custom label, and an id for the main (arrow-bindable) shape */
+export type BuildOpts = { text?: string; id?: string };
+
 export type HLDComponent = {
   key: string; // Alt + this key inserts it (event.code `Key${key}`)
+  /** stable name the AI uses to ask for this component */
+  type: string;
   label: string;
   color: { bg: string; stroke: string };
-  build: (cx: number, cy: number) => ExcalidrawElementSkeleton[];
+  build: (
+    cx: number,
+    cy: number,
+    opts?: BuildOpts,
+  ) => ExcalidrawElementSkeleton[];
 };
+
+/** wider boxes for longer labels, so text doesn't wrap into 3 lines */
+const fitWidth = (w: number, text: string) =>
+  Math.max(w, Math.min(320, text.length * 9 + 40));
 
 const FONT = FONT_FAMILY.Nunito;
 
@@ -34,13 +47,15 @@ type BoxOpts = {
 
 const box =
   (color: HLDComponent["color"], o: BoxOpts) =>
-  (cx: number, cy: number): ExcalidrawElementSkeleton[] => {
-    const w = o.w ?? 160;
+  (cx: number, cy: number, b: BuildOpts = {}): ExcalidrawElementSkeleton[] => {
+    const text = b.text ?? o.text;
+    const w = fitWidth(o.w ?? 160, text);
     const h = o.h ?? 72;
     const shape = o.shape ?? "rectangle";
     return [
       {
         type: shape,
+        id: b.id,
         x: cx - w / 2,
         y: cy - h / 2,
         width: w,
@@ -50,7 +65,7 @@ const box =
         roundness:
           shape === "rectangle" ? { type: ROUNDNESS.ADAPTIVE_RADIUS } : null,
         label: {
-          text: o.text,
+          text,
           fontSize: 16,
           fontFamily: FONT,
           verticalAlign: o.top ? "top" : "middle",
@@ -73,9 +88,10 @@ const arc = (
   });
 
 const cylinder =
-  (color: HLDComponent["color"], text: string) =>
-  (cx: number, cy: number): ExcalidrawElementSkeleton[] => {
-    const w = 130;
+  (color: HLDComponent["color"], defaultText: string) =>
+  (cx: number, cy: number, b: BuildOpts = {}): ExcalidrawElementSkeleton[] => {
+    const text = b.text ?? defaultText;
+    const w = fitWidth(130, text);
     const h = 100;
     const ry = 12;
     const x = cx - w / 2;
@@ -113,6 +129,7 @@ const cylinder =
       {
         // invisible label holder over the body, also the arrow target
         type: "rectangle",
+        id: b.id,
         x,
         y: y + ry * 2,
         width: w,
@@ -130,9 +147,10 @@ const cylinder =
   };
 
 const queue =
-  (color: HLDComponent["color"], text: string) =>
-  (cx: number, cy: number): ExcalidrawElementSkeleton[] => {
-    const w = 200;
+  (color: HLDComponent["color"], defaultText: string) =>
+  (cx: number, cy: number, b: BuildOpts = {}): ExcalidrawElementSkeleton[] => {
+    const text = b.text ?? defaultText;
+    const w = fitWidth(200, text) + 60;
     const h = 64;
     const x = cx - w / 2;
     const y = cy - h / 2;
@@ -155,6 +173,7 @@ const queue =
     return [
       {
         type: "rectangle",
+        id: b.id,
         x,
         y,
         width: w,
@@ -175,7 +194,8 @@ const queue =
 
 const user =
   (color: HLDComponent["color"]) =>
-  (cx: number, cy: number): ExcalidrawElementSkeleton[] => {
+  (cx: number, cy: number, b: BuildOpts = {}): ExcalidrawElementSkeleton[] => {
+    const text = b.text ?? "User";
     const groupIds = [randomId()];
     return [
       {
@@ -189,6 +209,7 @@ const user =
       },
       {
         type: "rectangle",
+        id: b.id,
         x: cx - 26,
         y: cy - 12,
         width: 52,
@@ -199,9 +220,9 @@ const user =
       },
       {
         type: "text",
-        x: cx - 18,
+        x: cx - text.length * 4.5,
         y: cy + 24,
-        text: "User",
+        text,
         fontSize: 16,
         fontFamily: FONT,
         groupIds,
@@ -226,87 +247,101 @@ const C = {
 };
 
 export const HLD_COMPONENTS: HLDComponent[] = [
-  { key: "U", label: "User", color: C.blue, build: user(C.blue) },
+  { key: "U", type: "user", label: "User", color: C.blue, build: user(C.blue) },
   {
     key: "C",
+    type: "client",
     label: "Client",
     color: C.blue,
     build: box(C.blue, { text: "Web Client" }),
   },
   {
     key: "M",
+    type: "mobile",
     label: "Mobile app",
     color: C.blue,
     build: box(C.blue, { text: "Mobile", w: 80, h: 130 }),
   },
   {
     key: "E",
+    type: "cdn",
     label: "CDN",
     color: C.cyan,
     build: box(C.cyan, { text: "CDN", shape: "ellipse", w: 130, h: 70 }),
   },
   {
     key: "H",
+    type: "dns",
     label: "DNS",
     color: C.cyan,
     build: box(C.cyan, { text: "DNS", shape: "ellipse", w: 110, h: 60 }),
   },
   {
     key: "L",
+    type: "load_balancer",
     label: "Load balancer",
     color: C.violet,
     build: box(C.violet, { text: "Load Balancer", w: 180 }),
   },
   {
     key: "G",
+    type: "api_gateway",
     label: "API gateway",
     color: C.amber,
     build: box(C.amber, { text: "API Gateway", w: 180 }),
   },
   {
     key: "S",
+    type: "server",
     label: "Server",
     color: C.slate,
     build: box(C.slate, { text: "Server" }),
   },
   {
     key: "V",
+    type: "service",
     label: "Service",
     color: C.slate,
     build: box(C.slate, { text: "Service" }),
   },
   {
     key: "W",
+    type: "worker",
     label: "Worker",
     color: C.slate,
     build: box(C.slate, { text: "Worker", dashed: true }),
   },
   {
     key: "D",
+    type: "database",
     label: "Database",
     color: C.green,
     build: cylinder(C.green, "Database"),
   },
   {
     key: "R",
+    type: "cache",
     label: "Cache",
     color: C.red,
     build: box(C.red, { text: "Cache (Redis)" }),
   },
   {
     key: "Q",
+    type: "queue",
     label: "Queue",
     color: C.yellow,
     build: queue(C.yellow, "Queue"),
   },
   {
     key: "O",
+    type: "object_storage",
     label: "Object storage",
     color: C.green,
     build: box(C.green, { text: "Object Storage", w: 170 }),
   },
   {
     key: "B",
+    type: "container",
     label: "Docker container",
     color: C.sky,
     build: box(C.sky, {
@@ -319,6 +354,7 @@ export const HLD_COMPONENTS: HLDComponent[] = [
   },
   {
     key: "K",
+    type: "cluster",
     label: "K8s cluster / VPC",
     color: C.k8s,
     build: box(C.k8s, {
@@ -331,17 +367,20 @@ export const HLD_COMPONENTS: HLDComponent[] = [
   },
   {
     key: "X",
+    type: "external_api",
     label: "External API",
     color: C.gray,
     build: box(C.gray, { text: "External API", dashed: true }),
   },
   {
     key: "N",
+    type: "note",
     label: "Note",
     color: C.note,
-    build: (cx, cy) => [
+    build: (cx, cy, b = {}) => [
       {
         type: "stickynote",
+        id: b.id,
         x: cx - 90,
         y: cy - 90,
         width: 180,
@@ -349,7 +388,7 @@ export const HLD_COMPONENTS: HLDComponent[] = [
         backgroundColor: C.note.bg,
         strokeColor: C.note.stroke,
         roughness: 0,
-        label: { text: "Note", fontSize: 20, fontFamily: FONT },
+        label: { text: b.text ?? "Note", fontSize: 20, fontFamily: FONT },
       },
     ],
   },

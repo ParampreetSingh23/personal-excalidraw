@@ -5,6 +5,7 @@
   // no *.workers.dev URL: it would bypass Cloudflare Access on the domain
   "workers_dev": false,
   "preview_urls": false,
+  "vars": { "GEMINI_MODEL": "gemini-3.8-flash" },
   "routes": [{ "pattern": "draw.parampreetsingh.dev", "custom_domain": true }],
   "assets": {
     "directory": "./excalidraw-app/build",
