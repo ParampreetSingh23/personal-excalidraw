@@ -6,6 +6,5 @@ export const STORAGE_KEYS = {
   LOCAL_STORAGE_ELEMENTS: "excalidraw",
   LOCAL_STORAGE_APP_STATE: "excalidraw-state",
   LOCAL_STORAGE_THEME: "excalidraw-theme",
-  LOCAL_STORAGE_LAST_DRAWING: "last-drawing",
   IDB_LIBRARY: "excalidraw-library",
 } as const;

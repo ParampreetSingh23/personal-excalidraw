@@ -9,7 +9,7 @@
   "assets": {
     "directory": "./excalidraw-app/build",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*"]
+    "run_worker_first": ["/api/*", "/login", "/logout"]
   },
   "kv_namespaces": [
     // fill in: `npx wrangler kv namespace create DRAWINGS`

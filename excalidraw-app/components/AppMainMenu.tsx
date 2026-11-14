@@ -16,6 +16,9 @@ export const AppMainMenu: React.FC<{
     >
       Drawings
     </MainMenu.Item>
+    <MainMenu.Item icon={LoadIcon} onSelect={() => window.location.assign("/")}>
+      All boards
+    </MainMenu.Item>
     <MainMenu.Separator />
     <MainMenu.DefaultItems.LoadScene />
     <MainMenu.DefaultItems.SaveToActiveFile />
@@ -29,5 +32,12 @@ export const AppMainMenu: React.FC<{
     <MainMenu.DefaultItems.Preferences />
     <MainMenu.DefaultItems.ToggleTheme allowSystemTheme theme={props.theme} />
     <MainMenu.DefaultItems.ChangeCanvasBackground />
+    <MainMenu.Separator />
+    <MainMenu.Item
+      icon={LoadIcon}
+      onSelect={() => window.location.assign("/logout")}
+    >
+      Log out
+    </MainMenu.Item>
   </MainMenu>
 ));

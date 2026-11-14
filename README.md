@@ -2,7 +2,11 @@
 
 Personal, minimal Excalidraw. Every drawing is its own file (`/d/<name>`), stored in Cloudflare Workers KV. Hosted at `draw.parampreetsingh.dev`.
 
-- **Ctrl/Cmd+P**: fuzzy-open a drawing, or type a new name + Enter to create one
+- `/` = boards dashboard (search `/`, new board `N`), `/d/<name>` = board
+- Password login (`/login`), 30-day session cookie
+- Right panel: one-click HLD components (User, Client, LB, Gateway, Server,
+  DB, Cache, Queue, Container, K8s, Note …), each on **Alt+letter**; Alt+1 toggles panel
+- **Ctrl/Cmd+P** inside a board: fuzzy-open / create another board
 - Autosave (1s debounce), top-left chip shows `saved / saving… / not saved!`
 - Mermaid → diagram stays (menu → TTD). No collab, share links, AI, telemetry.
 

@@ -20,6 +20,10 @@ export const slugify = (name: string) =>
 
 const request = async (path: string, init?: RequestInit) => {
   const response = await fetch(`/api/drawings${path}`, init);
+  if (response.status === 401) {
+    window.location.assign("/login");
+    throw new Error("Not signed in");
+  }
   if (!response.ok && response.status !== 404) {
     throw new Error(`${init?.method ?? "GET"} ${path}: ${response.status}`);
   }
@@ -40,3 +44,13 @@ export const saveDrawing = (id: string, body: string) =>
 
 export const deleteDrawing = (id: string) =>
   request(`/${id}`, { method: "DELETE" });
+
+/** creates an empty board (no-op if the id already exists) */
+export const createDrawing = async (name: string) => {
+  const id = slugify(name);
+  if (!(await loadDrawing(id))) {
+    const empty: DrawingData = { name, elements: [], appState: {}, files: {} };
+    await saveDrawing(id, JSON.stringify(empty));
+  }
+  return id;
+};

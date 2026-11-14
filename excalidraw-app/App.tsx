@@ -4,6 +4,9 @@ import {
   TTDDialogTrigger,
   CaptureUpdateAction,
   ExcalidrawAPIProvider,
+  Sidebar,
+  convertToExcalidrawElements,
+  getCommonBounds,
   useExcalidrawAPI,
 } from "@excalidraw/excalidraw";
 import { clearAppStateForLocalStorage } from "@excalidraw/excalidraw/appState";
@@ -11,7 +14,13 @@ import {
   CommandPalette,
   DEFAULT_CATEGORIES,
 } from "@excalidraw/excalidraw/components/CommandPalette/CommandPalette";
-import { debounce, EVENT, resolvablePromise } from "@excalidraw/common";
+import {
+  debounce,
+  EVENT,
+  FONT_FAMILY,
+  isWritableElement,
+  resolvablePromise,
+} from "@excalidraw/common";
 import polyfill from "@excalidraw/excalidraw/polyfill";
 import {
   getNonDeletedElements,
@@ -35,17 +44,25 @@ import type { OrderedExcalidrawElement } from "@excalidraw/element/types";
 import type { ResolvablePromise } from "@excalidraw/common/utils";
 
 import { Provider, appJotaiStore } from "./app-jotai";
-import { SAVE_DEBOUNCE_MS, SAVE_RETRY_MS, STORAGE_KEYS } from "./app_constants";
+import { SAVE_DEBOUNCE_MS, SAVE_RETRY_MS } from "./app_constants";
 import { AppMainMenu } from "./components/AppMainMenu";
 import { AppWelcomeScreen } from "./components/AppWelcomeScreen";
+import {
+  ALT,
+  COMPONENTS_SIDEBAR,
+  ComponentsPanel,
+} from "./components/ComponentsPanel";
+import { Dashboard } from "./components/Dashboard";
 import { DrawingSwitcher } from "./components/DrawingSwitcher";
 import { TopErrorBoundary } from "./components/TopErrorBoundary";
 import { loadDrawing, saveDrawing } from "./data/drawings";
+import { HLD_COMPONENTS } from "./data/components";
 import { LibraryIndexedDBAdapter } from "./data/library";
 import { useHandleAppTheme } from "./useHandleAppTheme";
 
 import "./index.scss";
 
+import type { HLDComponent } from "./data/components";
 import type { DrawingData } from "./data/drawings";
 
 polyfill();
@@ -54,34 +71,35 @@ window.EXCALIDRAW_THROTTLE_RENDER = true;
 
 type SaveStatus = "saved" | "saving" | "error";
 
-const DEFAULT_DRAWING = "home";
+/** drawing id from `/d/<id>`; null = boards dashboard */
+const getBoardId = () =>
+  window.location.pathname.match(/^\/d\/([a-z0-9-]+)\/?$/)?.[1] ?? null;
 
-/** drawing id from `/d/<id>`, else the last opened one */
-const getInitialId = () => {
-  const match = window.location.pathname.match(/^\/d\/([a-z0-9-]+)\/?$/);
-  let last: string | null = null;
-  try {
-    last = localStorage.getItem(STORAGE_KEYS.LOCAL_STORAGE_LAST_DRAWING);
-  } catch {}
-  return match?.[1] || last || DEFAULT_DRAWING;
+/** clean, non-sketchy defaults; a board's own saved state wins */
+const DEFAULT_APP_STATE: Partial<AppState> = {
+  currentItemRoughness: 0,
+  currentItemStrokeWidthKey: "thin",
+  currentItemFontFamily: FONT_FAMILY.Nunito,
+  currentItemArrowType: "elbow",
+  openSidebar: { name: COMPONENTS_SIDEBAR },
 };
 
 const toInitialData = (
   data: DrawingData | null,
 ): ExcalidrawInitialDataState => ({
   elements: restoreElements(data?.elements, null, { repairBindings: true }),
-  appState: restoreAppState(data?.appState, null),
+  appState: restoreAppState({ ...DEFAULT_APP_STATE, ...data?.appState }, null),
   files: data?.files,
 });
-
 const ExcalidrawWrapper = () => {
   const excalidrawAPI = useExcalidrawAPI();
   const { editorTheme, appTheme, setAppTheme } = useHandleAppTheme();
 
   const [drawing, setDrawing] = useState(() => {
-    const id = getInitialId();
+    const id = getBoardId()!;
     return { id, name: id };
   });
+  const [panelDocked, setPanelDocked] = useState(true);
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("saved");
 
@@ -204,11 +222,8 @@ const ExcalidrawWrapper = () => {
   // loading / switching
   // ---------------------------------------------------------------------------
 
-  const remember = (id: string, name: string) => {
-    document.title = name;
-    try {
-      localStorage.setItem(STORAGE_KEYS.LOCAL_STORAGE_LAST_DRAWING, id);
-    } catch {}
+  const remember = (_id: string, name: string) => {
+    document.title = `${name} · Draw`;
   };
 
   // initial load
@@ -291,12 +306,112 @@ const ExcalidrawWrapper = () => {
   // back / forward
   useEffect(() => {
     const onPopState = () => {
-      const id = getInitialId();
-      openDrawing(id, id, { push: false });
+      const id = getBoardId();
+      if (id) {
+        openDrawing(id, id, { push: false });
+      } else {
+        window.location.reload(); // back to the dashboard
+      }
     };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, [openDrawing]);
+
+  // ---------------------------------------------------------------------------
+  // HLD components
+  // ---------------------------------------------------------------------------
+
+  const insertComponent = useCallback(
+    (component: HLDComponent) => {
+      if (!excalidrawAPI) {
+        return;
+      }
+      const { scrollX, scrollY, zoom, width, height } =
+        excalidrawAPI.getAppState();
+      const existing = excalidrawAPI
+        .getSceneElements()
+        .map((e) => getCommonBounds([e]));
+      const overlaps = ([x1, y1, x2, y2]: readonly number[]) =>
+        existing.some(
+          ([a1, b1, a2, b2]) => x1 < a2 && x2 > a1 && y1 < b2 && y2 > b1,
+        );
+      // start at viewport center, walk right then down to the first free spot
+      // ponytail: O(tries * elements), fine for diagram-sized scenes
+      const cx0 = width / 2 / zoom.value - scrollX;
+      const cy0 = height / 2 / zoom.value - scrollY;
+      let added = convertToExcalidrawElements(component.build(cx0, cy0), {
+        regenerateIds: true,
+      });
+      const [bx1, by1, bx2, by2] = getCommonBounds(added);
+      const stepX = bx2 - bx1 + 40;
+      const stepY = by2 - by1 + 40;
+      search: for (let row = 0; row < 6; row++) {
+        for (let col = 0; col < 6; col++) {
+          const dx = col * stepX;
+          const dy = row * stepY;
+          if (!overlaps([bx1 + dx, by1 + dy, bx2 + dx, by2 + dy])) {
+            if (dx || dy) {
+              added = convertToExcalidrawElements(
+                component.build(cx0 + dx, cy0 + dy),
+                { regenerateIds: true },
+              );
+            }
+            break search;
+          }
+        }
+      }
+      excalidrawAPI.updateScene({
+        elements: [
+          ...excalidrawAPI.getSceneElementsIncludingDeleted(),
+          ...added,
+        ],
+        appState: {
+          selectedElementIds: Object.fromEntries(
+            added
+              .filter((e) => !("containerId" in e && e.containerId))
+              .map((e) => [e.id, true]),
+          ),
+          selectedGroupIds: Object.fromEntries(
+            added.flatMap((e) => e.groupIds).map((id) => [id, true]),
+          ),
+        },
+        captureUpdate: CaptureUpdateAction.IMMEDIATELY,
+      });
+    },
+    [excalidrawAPI],
+  );
+
+  // Alt+<key>: insert component, Alt+1: toggle panel.
+  // event.code, since Alt+letter types special chars on macOS.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        !event.altKey ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        isWritableElement(event.target)
+      ) {
+        return;
+      }
+      if (event.code === "Digit1") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        excalidrawAPI?.toggleSidebar({ name: COMPONENTS_SIDEBAR });
+        return;
+      }
+      const component = HLD_COMPONENTS.find(
+        (c) => event.code === `Key${c.key}`,
+      );
+      if (component) {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        insertComponent(component);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [excalidrawAPI, insertComponent]);
 
   // Ctrl/Cmd+P: quick open. Capture phase, the editor binds it to a toast.
   useEffect(() => {
@@ -349,21 +464,41 @@ const ExcalidrawWrapper = () => {
         theme={editorTheme}
         onThemeChange={setAppTheme}
         renderTopLeftUI={() => (
-          <button
-            className="drawing-chip"
-            title="Open or create a drawing (Ctrl/Cmd+P)"
-            onClick={() => setSwitcherOpen(true)}
-          >
-            <span className="drawing-chip__name">{drawing.name}</span>
-            <span className={`drawing-chip__status is-${saveStatus}`}>
-              {saveStatus === "saved"
-                ? "saved"
-                : saveStatus === "saving"
-                ? "saving…"
-                : "not saved!"}
-            </span>
-          </button>
+          <div className="top-left-bar">
+            <a
+              className="drawing-chip drawing-chip--home"
+              href="/"
+              title="All boards"
+            >
+              Boards
+            </a>
+            <button
+              className="drawing-chip"
+              title="Open or create a drawing (Ctrl/Cmd+P)"
+              onClick={() => setSwitcherOpen(true)}
+            >
+              <span className="drawing-chip__name">{drawing.name}</span>
+              <span className={`drawing-chip__status is-${saveStatus}`}>
+                {saveStatus === "saved"
+                  ? "saved"
+                  : saveStatus === "saving"
+                  ? "saving…"
+                  : "not saved!"}
+              </span>
+            </button>
+          </div>
         )}
+        renderTopRightUI={(isMobile) =>
+          isMobile ? null : (
+            <Sidebar.Trigger
+              name={COMPONENTS_SIDEBAR}
+              title={`Components (${ALT}1)`}
+              className="components-trigger"
+            >
+              Components
+            </Sidebar.Trigger>
+          )
+        }
         onLinkOpen={(element, event) => {
           if (element.link && isElementLink(element.link)) {
             event.preventDefault();
@@ -394,6 +529,11 @@ const ExcalidrawWrapper = () => {
             },
           ]}
         />
+        <ComponentsPanel
+          docked={panelDocked}
+          onDock={setPanelDocked}
+          onInsert={insertComponent}
+        />
         {switcherOpen && (
           <DrawingSwitcher
             currentId={drawing.id}
@@ -408,11 +548,15 @@ const ExcalidrawWrapper = () => {
 
 const ExcalidrawApp = () => (
   <TopErrorBoundary>
-    <Provider store={appJotaiStore}>
-      <ExcalidrawAPIProvider>
-        <ExcalidrawWrapper />
-      </ExcalidrawAPIProvider>
-    </Provider>
+    {getBoardId() ? (
+      <Provider store={appJotaiStore}>
+        <ExcalidrawAPIProvider>
+          <ExcalidrawWrapper />
+        </ExcalidrawAPIProvider>
+      </Provider>
+    ) : (
+      <Dashboard />
+    )}
   </TopErrorBoundary>
 );
 
