@@ -121,11 +121,12 @@ const handleLogin = async (request: Request, env: Env) => {
     return loginPage("Server not configured: APP_PASSWORD secret is missing.");
   }
   const form = await request.formData();
-  const password = String(form.get("password") ?? "");
+  // trim: a stray space/newline from copy-paste is the usual "wrong password"
+  const password = String(form.get("password") ?? "").trim();
   // compare fixed-length digests so length doesn't leak
   const ok = safeEqual(
     await hmac("login", password),
-    await hmac("login", env.APP_PASSWORD),
+    await hmac("login", env.APP_PASSWORD.trim()),
   );
   if (!ok) {
     // ponytail: fixed delay only slows serial guessing; add a Cloudflare rate
