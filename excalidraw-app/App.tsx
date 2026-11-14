@@ -354,11 +354,17 @@ const ExcalidrawWrapper = () => {
       }
       const board = describeBoard(excalidrawAPI.getSceneElements());
       const ops = await askAi(prompt, board.forModel);
-      const { elements, added } = applyAiOps(
+      const { elements, added, changed } = applyAiOps(
         excalidrawAPI.getSceneElementsIncludingDeleted(),
         ops,
         board,
       );
+      if (!changed) {
+        // don't claim success when the answer matched nothing on the board
+        throw new Error(
+          `AI answered but nothing on the board changed ("${ops.summary}"). Try rephrasing.`,
+        );
+      }
       excalidrawAPI.updateScene({
         elements: elements as OrderedExcalidrawElement[],
         captureUpdate: CaptureUpdateAction.IMMEDIATELY,

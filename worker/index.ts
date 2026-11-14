@@ -374,6 +374,8 @@ const handleAi = async (request: Request, env: Env) => {
   const text = result?.candidates?.[0]?.content?.parts
     ?.map((p: any) => p.text ?? "")
     .join("");
+  // eslint-disable-next-line no-console
+  console.log(`ai: result ${String(text).slice(0, 800)}`);
   try {
     return json(JSON.parse(text));
   } catch {

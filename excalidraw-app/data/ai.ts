@@ -184,7 +184,18 @@ export const applyAiOps = (
   // nodes/edges deleted meanwhile are simply skipped
   const nodes = board.nodes.filter((n) => !live.get(n.el.id)?.isDeleted);
   const edges = board.edges.filter((e) => !live.get(e.el.id)?.isDeleted);
-  const nodeByKey = new Map(nodes.map((n) => [n.key, n]));
+  // models sometimes answer with the label instead of the key: accept both
+  const norm = (s: unknown) =>
+    String(s).toLowerCase().replace(/\s+/g, " ").trim();
+  const nodeByKey = new Map<string, Node>();
+  for (const n of nodes) {
+    nodeByKey.set(norm(n.label), n);
+  }
+  for (const n of nodes) {
+    nodeByKey.set(n.key, n);
+  }
+  const findNode = (ref: string) =>
+    nodeByKey.get(ref) ?? nodeByKey.get(norm(ref));
   const edgeByKey = new Map(edges.map((e) => [e.key, e]));
 
   // --- deletions ------------------------------------------------------------
@@ -198,7 +209,7 @@ export const applyAiOps = (
     edge && deleteWithText(edge.el);
   }
   for (const key of ops.removeNodes) {
-    const node = nodeByKey.get(key);
+    const node = findNode(key);
     if (!node) {
       continue;
     }
@@ -224,8 +235,8 @@ export const applyAiOps = (
   // --- recolor: every visible part of the component, plus its text ---------
   const recolored = new Map<string, Partial<ExcalidrawElement>>();
   for (const { id, color } of ops.recolor) {
-    const node = nodeByKey.get(id);
-    const palette = COLORS[color];
+    const node = findNode(id);
+    const palette = COLORS[norm(color)];
     if (!node || !palette) {
       continue;
     }
@@ -240,9 +251,15 @@ export const applyAiOps = (
       if (textIds.has(el.id) || (part && el.type === "text")) {
         recolored.set(el.id, { strokeColor: palette.stroke });
       } else if (part && el.type !== "arrow") {
+        // the node's own shape gets filled even if it was transparent
+        // (e.g. Mermaid boxes); invisible helpers keep their transparency
+        const fill =
+          el.backgroundColor !== "transparent" ||
+          (el.id === node.el.id && el.strokeColor !== "transparent");
         recolored.set(el.id, {
-          ...(el.backgroundColor !== "transparent" && {
+          ...(fill && {
             backgroundColor: palette.bg,
+            fillStyle: "solid" as const,
           }),
           ...(el.strokeColor !== "transparent" && {
             strokeColor: palette.stroke,
@@ -303,8 +320,8 @@ export const applyAiOps = (
   // endpoints are cloned in as stand-ins and dropped after conversion
   const standIns = new Set<string>();
   for (const e of ops.addEdges) {
-    const a = target.get(e.from);
-    const b = target.get(e.to);
+    const a = target.get(e.from) ?? target.get(findNode(e.from)?.key ?? "");
+    const b = target.get(e.to) ?? target.get(findNode(e.to)?.key ?? "");
     if (!a || !b || a.id === b.id) {
       continue;
     }
@@ -400,5 +417,9 @@ export const applyAiOps = (
     return el;
   });
 
-  return { elements: [...next, ...added], added };
+  return {
+    elements: [...next, ...added],
+    added,
+    changed: added.length + deleted.size + recolored.size,
+  };
 };
