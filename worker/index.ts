@@ -295,6 +295,7 @@ const handleAi = async (request: Request, env: Env) => {
       },
     );
   } catch (error: any) {
+    // eslint-disable-next-line no-console
     console.log(
       `ai: ${model} failed after ${Date.now() - started}ms: ${error?.name}`,
     );
@@ -310,6 +311,7 @@ const handleAi = async (request: Request, env: Env) => {
   } finally {
     clearTimeout(timer);
   }
+  // eslint-disable-next-line no-console
   console.log(`ai: ${model} ${response.status} in ${Date.now() - started}ms`);
   if (!response.ok) {
     // don't leak upstream details beyond status + message
