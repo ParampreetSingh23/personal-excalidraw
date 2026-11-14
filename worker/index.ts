@@ -14,6 +14,7 @@ interface Env {
   GEMINI_MODEL?: string;
   /** low | medium | high */
   GEMINI_THINKING?: string;
+  GEMINI_FALLBACK_MODEL?: string;
   DRAWINGS: {
     get(key: string, type: "stream"): Promise<ReadableStream | null>;
     put(
@@ -178,6 +179,18 @@ const AI_TYPES = [
   "note",
 ];
 
+const AI_COLORS = [
+  "blue",
+  "slate",
+  "violet",
+  "amber",
+  "green",
+  "red",
+  "yellow",
+  "cyan",
+  "gray",
+];
+
 const AI_SYSTEM = `You edit system-design diagrams on a whiteboard.
 You get the user's request and the CURRENT diagram: nodes (id, label, col, row)
 and edges (id, from, to). Return only the changes needed.
@@ -198,6 +211,9 @@ Rules:
 - To insert something in the middle of an existing connection (e.g. add a load
   balancer between client and servers), remove that edge and add the new ones.
 - Do not remove or duplicate anything the user did not ask about.
+- To change colours, use recolor with one of: ${AI_COLORS.join(", ")}.
+  Colour by role when asked to "add colours" (e.g. clients blue, gateways amber,
+  services slate, data stores green, caches red, queues yellow).
 - summary: one short sentence describing what you changed.`;
 
 const AI_SCHEMA = {
@@ -232,6 +248,17 @@ const AI_SCHEMA = {
     },
     removeNodes: { type: "array", items: { type: "string" } },
     removeEdges: { type: "array", items: { type: "string" } },
+    recolor: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: "string" },
+          color: { type: "string", enum: AI_COLORS },
+        },
+        required: ["id", "color"],
+      },
+    },
   },
   required: ["summary", "addNodes", "addEdges", "removeNodes", "removeEdges"],
 };
@@ -258,69 +285,90 @@ const handleAi = async (request: Request, env: Env) => {
     return json({ error: "prompt missing or too large" }, 400);
   }
 
-  const model = env.GEMINI_MODEL || "gemini-3.8-flash";
-  const started = Date.now();
-  // our own deadline, well under Cloudflare's ~100s (which surfaces as a bare 524)
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60_000);
-  let response: Response;
-  try {
-    response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+  const requestBody = JSON.stringify({
+    systemInstruction: { parts: [{ text: AI_SYSTEM }] },
+    contents: [
       {
-        method: "POST",
-        signal: controller.signal,
-        headers: {
-          "content-type": "application/json",
-          "x-goog-api-key": env.GEMINI_API_KEY,
-        },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: AI_SYSTEM }] },
-          contents: [
-            {
-              role: "user",
-              parts: [
-                { text: `CURRENT DIAGRAM:\n${diagram}\n\nREQUEST:\n${prompt}` },
-              ],
-            },
-          ],
-          generationConfig: {
-            // default (medium) thinking is slow; diagram edits don't need it
-            thinkingConfig: { thinkingLevel: env.GEMINI_THINKING || "low" },
-            responseFormat: {
-              text: { mimeType: "APPLICATION_JSON", schema: AI_SCHEMA },
-            },
-          },
-        }),
+        role: "user",
+        parts: [
+          { text: `CURRENT DIAGRAM:\n${diagram}\n\nREQUEST:\n${prompt}` },
+        ],
       },
-    );
-  } catch (error: any) {
-    // eslint-disable-next-line no-console
-    console.log(
-      `ai: ${model} failed after ${Date.now() - started}ms: ${error?.name}`,
-    );
+    ],
+    generationConfig: {
+      // default (medium) thinking is slow; diagram edits don't need it
+      thinkingConfig: { thinkingLevel: env.GEMINI_THINKING || "low" },
+      responseFormat: {
+        text: { mimeType: "APPLICATION_JSON", schema: AI_SCHEMA },
+      },
+    },
+  });
+
+  // primary model, then a fallback when it is overloaded / slow / erroring.
+  // Each attempt gets its own deadline; together they stay under Cloudflare's
+  // ~100s request limit (which otherwise surfaces as a bare 524).
+  const models = [
+    env.GEMINI_MODEL || "gemini-3.8-flash",
+    env.GEMINI_FALLBACK_MODEL || "gemini-3.6-flash",
+  ];
+  let response: Response | null = null;
+  let lastError = "";
+  for (const model of models) {
+    const started = Date.now();
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 28_000);
+    try {
+      response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+        {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "content-type": "application/json",
+            "x-goog-api-key": env.GEMINI_API_KEY,
+          },
+          body: requestBody,
+        },
+      );
+      // eslint-disable-next-line no-console
+      console.log(
+        `ai: ${model} ${response.status} in ${Date.now() - started}ms`,
+      );
+      if (response.ok) {
+        break;
+      }
+      const status = response.status;
+      const detail = await response.text();
+      let message = detail.slice(0, 300);
+      try {
+        message = JSON.parse(detail).error?.message ?? message;
+      } catch {}
+      lastError = `${model} ${status}: ${message}`;
+      response = null;
+      // bad request / auth problems won't get better on another model
+      if (![429, 500, 502, 503, 504].includes(status)) {
+        break;
+      }
+    } catch (error: any) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `ai: ${model} failed after ${Date.now() - started}ms: ${error?.name}`,
+      );
+      lastError =
+        error?.name === "AbortError"
+          ? `${model} took longer than 28s`
+          : `${model}: ${error?.message ?? error}`;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  if (!response) {
     return json(
       {
-        error:
-          error?.name === "AbortError"
-            ? "Gemini took longer than 60s. Try a shorter request, or try again."
-            : `Could not reach Gemini: ${error?.message ?? error}`,
+        error: `Gemini is busy right now, try again in a minute. (${lastError})`,
       },
-      504,
+      502,
     );
-  } finally {
-    clearTimeout(timer);
-  }
-  // eslint-disable-next-line no-console
-  console.log(`ai: ${model} ${response.status} in ${Date.now() - started}ms`);
-  if (!response.ok) {
-    // don't leak upstream details beyond status + message
-    const detail = await response.text();
-    let message = detail.slice(0, 300);
-    try {
-      message = JSON.parse(detail).error?.message ?? message;
-    } catch {}
-    return json({ error: `Gemini ${response.status}: ${message}` }, 502);
   }
   const result: any = await response.json();
   const text = result?.candidates?.[0]?.content?.parts

@@ -231,7 +231,7 @@ const user =
     ];
   };
 
-const C = {
+export const COLORS: Record<string, { bg: string; stroke: string }> = {
   blue: { bg: "#e8f0fe", stroke: "#2f5fd0" },
   slate: { bg: "#f1f3f5", stroke: "#495057" },
   violet: { bg: "#f1e9ff", stroke: "#6d3fd6" },
@@ -245,6 +245,8 @@ const C = {
   gray: { bg: "#ffffff", stroke: "#868e96" },
   note: { bg: "#fff3a6", stroke: "#1e1e1e" },
 };
+
+const C = COLORS;
 
 export const HLD_COMPONENTS: HLDComponent[] = [
   { key: "U", type: "user", label: "User", color: C.blue, build: user(C.blue) },

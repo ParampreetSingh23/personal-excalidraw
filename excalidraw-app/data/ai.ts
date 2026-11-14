@@ -4,7 +4,7 @@ import { FONT_FAMILY, randomId } from "@excalidraw/common";
 import type { ExcalidrawElementSkeleton } from "@excalidraw/element/transform";
 import type { ExcalidrawElement } from "@excalidraw/element/types";
 
-import { HLD_COMPONENTS } from "./components";
+import { COLORS, HLD_COMPONENTS } from "./components";
 
 /**
  * Bridges the board and the AI: the board is described as a small graph on a
@@ -28,6 +28,7 @@ export type AiOps = {
   addEdges: { from: string; to: string; label?: string }[];
   removeNodes: string[];
   removeEdges: string[];
+  recolor: { id: string; color: string }[];
 };
 
 type Node = {
@@ -153,6 +154,7 @@ export const askAi = async (
     addEdges: Array.isArray(data.addEdges) ? data.addEdges : [],
     removeNodes: Array.isArray(data.removeNodes) ? data.removeNodes : [],
     removeEdges: Array.isArray(data.removeEdges) ? data.removeEdges : [],
+    recolor: Array.isArray(data.recolor) ? data.recolor : [],
   };
 };
 
@@ -215,6 +217,37 @@ export const applyAiOps = (
           (el.endBinding && parts.has(el.endBinding.elementId)));
       if (parts.has(el.id) || attached) {
         deleteWithText(el);
+      }
+    }
+  }
+
+  // --- recolor: every visible part of the component, plus its text ---------
+  const recolored = new Map<string, Partial<ExcalidrawElement>>();
+  for (const { id, color } of ops.recolor) {
+    const node = nodeByKey.get(id);
+    const palette = COLORS[color];
+    if (!node || !palette) {
+      continue;
+    }
+    const group = outerGroup(node.el);
+    const textIds = new Set(
+      (node.el.boundElements ?? [])
+        .filter((b) => b.type === "text")
+        .map((b) => b.id),
+    );
+    for (const el of elements) {
+      const part = el.id === node.el.id || (group && outerGroup(el) === group);
+      if (textIds.has(el.id) || (part && el.type === "text")) {
+        recolored.set(el.id, { strokeColor: palette.stroke });
+      } else if (part && el.type !== "arrow") {
+        recolored.set(el.id, {
+          ...(el.backgroundColor !== "transparent" && {
+            backgroundColor: palette.bg,
+          }),
+          ...(el.strokeColor !== "transparent" && {
+            strokeColor: palette.stroke,
+          }),
+        });
       }
     }
   }
@@ -339,13 +372,18 @@ export const applyAiOps = (
     converted.filter((el) => standIns.has(el.id)).map((el) => [el.id, el]),
   );
 
-  const next = elements.map((el) => {
+  const next = elements.map((original) => {
+    let el = original;
     if (deleted.has(el.id)) {
       return {
         ...el,
         isDeleted: true,
         version: el.version + 1,
       } as ExcalidrawElement;
+    }
+    const recolor = recolored.get(el.id);
+    if (recolor) {
+      el = { ...el, ...recolor, version: el.version + 1 } as ExcalidrawElement;
     }
     const standIn = standInById.get(el.id);
     if (standIn) {
